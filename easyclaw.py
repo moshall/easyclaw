@@ -45,9 +45,10 @@ def _start_web_server(port: int, reload_enabled: bool) -> None:
 def print_help():
     print("EasyClaw 统一管理入口")
     print("用法：")
-    print("  python easyclaw.py tui   --- 进入命令行双向互动系统")
+    print("  python easyclaw.py tui   --- 进入稳定模式 TUI（数字输入）")
     print("  python easyclaw.py web [--port 4231]   --- 启动带鉴权的可视化网页端服务器")
     print("环境变量：")
+    print("  EASYCLAW_TUI_MODE      --- 兼容变量（panel 已废弃，将自动使用稳定模式）")
     print(f"  EASYCLAW_WEB_PORT      --- 自定义 Web 端口（默认 {DEFAULT_WEB_PORT}）")
     print("  EASYCLAW_WEB_RELOAD    --- 1/0 控制是否开启自动重载（默认 1）")
     print()
@@ -64,14 +65,11 @@ def main(argv: list[str] | None = None) -> int:
     cmd = str(args[1] or "").lower()
 
     if cmd == "tui":
-        # 默认走稳定模式（cli.py），面板模式需显式开启
-        tui_mode = (os.environ.get("EASYCLAW_TUI_MODE", "classic") or "classic").strip().lower()
+        tui_mode = (os.environ.get("EASYCLAW_TUI_MODE", "") or "").strip().lower()
         if tui_mode == "panel":
-            from app import main as panel_main
-            panel_main()
-        else:
-            from cli import main as classic_main
-            classic_main()
+            print("⚠️ EASYCLAW_TUI_MODE=panel 已废弃，自动使用稳定模式 TUI。")
+        from cli import main as classic_main
+        classic_main()
         return 0
 
     elif cmd == "web":

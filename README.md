@@ -1,165 +1,128 @@
 # EasyClaw
 
-OpenClaw 的本地管理工具，提供稳定的数字输入 TUI（默认）和面板模式 TUI，用于统一管理模型、供应商、Agent、搜索服务与系统配置。
+EasyClaw 是 OpenClaw 的管理工具，提供：
+- 稳定模式 TUI（默认，纯数字输入）
+- Web UI（浏览器可视化管理）
 
-## 当前能力
+> 说明：面板模式 TUI 已移除。若设置 `EASYCLAW_TUI_MODE=panel`，程序会提示已废弃并自动使用稳定模式。
 
-- `📊 资产大盘`：查看模型状态、配额与关键摘要
-- `🧩 模型与供应商`：
-  - 供应商/模型资源库管理
-  - 全局模型优先级（主模型 + 备用链）
-  - 指定 Agent 模型优先级（覆盖全局）
-  - Spawn Agent 默认模型优先级（默认继承全局）
-- `🧭 Agent 与工作区`：
-  - 新增 Agent
-  - 工作区手动绑定/自动识别绑定
-  - 访问限制（仅工作区）与控制层快捷命令放行
-- `👥 Agent派发管理`：
+## 1. 功能特性
+
+- 模型与供应商管理
+  - 供应商资源库管理
+  - 模型池拉取、筛选、激活
+  - 全局主模型与备用链管理
+  - Agent 级模型覆盖、Spawn 默认模型策略
+- Agent 与工作区管理
+  - Agent 新增与工作区绑定
+  - 访问限制（仅工作区）与控制层放行
+- Agent 派发管理
   - 派发开关
-  - 最大派发并发
+  - 最大并发
   - 固定 Agent 白名单
-  - 按 Agent 维度管理派发策略
-- `🛠️ 服务配置`：
-  - 工具配置（搜索服务、向量化）
-  - 搜索服务支持“官方 + 扩展源”统一配置
-  - 搜索服务主备切换（Primary/Fallback）
-  - 配置回滚（查看备份并一键恢复）
-- `🔌 自动化与集成`：
+- 服务配置
+  - 官方搜索服务配置
+  - 扩展搜索源配置（适配层）
+  - 搜索主备切换
+  - 配置备份与回滚
+- 自动化与集成
   - 网关设置
-  - 系统辅助（Onboard/重启/回滚）
+  - 系统辅助（如重启、Onboard）
 
-## 搜索服务能力
+## 2. Quickstart
 
-### 官方搜索服务
+### macOS 一键安装
 
-当前菜单内支持配置官方搜索服务：
+```bash
+cd /path/to/easyclaw
+bash install.sh
+```
 
-- `brave`
-- `perplexity`
-- `grok`
-- `gemini`
-- `kimi`
+默认安装到：
+- `~/.openclaw/easyclaw`
+- 命令目录：`~/.local/bin`（若不在 PATH，脚本会提示）
 
-### 扩展搜索服务（适配层）
+### Linux 一键安装
 
-当前内置扩展适配：
+```bash
+cd /path/to/easyclaw
+bash install.sh
+```
 
-- `zhipu`
-- `serper`
-- `tavily`
-
-扩展配置文件：
-
-- `/root/.openclaw/easyclaw/search_adapters.json`（容器内路径）
-
-支持统一主备切换链：
-
-- `official:*` 与 `adapter:*` 可混合配置
-- 可演练 failover 验证切换行为
-
-## 快速开始
-
-### 一键安装（推荐）
+如需安装到系统命令目录：
 
 ```bash
 sudo bash install.sh
 ```
 
-安装脚本会自动：
+### Docker 一键安装
 
-- 识别运行环境（Docker/主机）
-- 安装依赖并创建虚拟环境
-- 将当前项目安装到 `/root/.openclaw/easyclaw`
-- 自动探测 `openclaw.json`（必要时创建最小骨架）
-- 注册命令：`easyclaw`、`easytui`
+在你的容器内执行（示例容器名：`easyclaw-web`）：
 
-安装后直接使用：
+```bash
+docker exec -it easyclaw-web bash -lc 'cd /easyclaw && bash install.sh'
+```
+
+安装后可直接在容器中运行：
+
+```bash
+docker exec -it easyclaw-web bash -lc 'easyclaw tui'
+docker exec -it easyclaw-web bash -lc 'easyclaw web --port 4231'
+```
+
+## 3. 运行执行方式
+
+### 3.1 TUI 执行
 
 ```bash
 easyclaw tui
-easyclaw web
 ```
 
-### 环境要求
+特点：
+- 稳定模式
+- 数字输入 + 回车
+- 不依赖方向键兼容性
 
-- Python 3.10+
-- OpenClaw CLI 可用（建议在容器内运行）
-- Linux/Docker（推荐）
+### 3.2 Web UI 访问
 
-### 本地运行（当前目录）
+启动：
 
 ```bash
-python3 easyclaw.py tui
+easyclaw web --port 4231
 ```
 
-### 面板模式（可选）
+浏览器访问：
+
+- `http://127.0.0.1:4231/`
+- 若启用 token：`http://127.0.0.1:4231/?token=<your-token>`
+
+## 4. 常见问题
+
+### Q1: `EASYCLAW_TUI_MODE=panel` 为什么不生效？
+
+A: 面板模式已下线。该变量只做兼容提示，程序会自动进入稳定模式 TUI。
+
+### Q2: 安装后找不到 `easyclaw` 命令？
+
+A: 通常是命令目录未加入 PATH。按安装脚本提示执行：
 
 ```bash
-EASYCLAW_TUI_MODE=panel python3 easyclaw.py tui
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-### Web 模式（可选）
+并写入 `~/.zprofile`（macOS）或 `~/.bashrc`（Linux）。
 
-```bash
-python3 easyclaw.py web
-```
+### Q3: Web UI 打不开？
 
-- 默认端口：`4231`
-- 自定义端口：
+A: 依次检查：
+- 进程是否已启动（`easyclaw web --port 4231`）
+- 端口是否被占用（改用其他端口）
+- 若在 Docker 内运行，是否做了端口映射
 
-```bash
-python3 easyclaw.py web --port 5001
-# 或
-EASYCLAW_WEB_PORT=5001 python3 easyclaw.py web
-```
+### Q4: 提示 `openclaw` 不存在？
 
-### 在 Docker 容器中运行（示例）
+A: EasyClaw 可启动，但官方能力依赖 OpenClaw CLI。请先在当前环境安装并确保 `openclaw` 可执行。
 
-```bash
-docker exec -it easyclaw-web bash
-# 进入项目目录后运行
-python3 easyclaw.py tui
-```
+### Q5: 配置改坏了怎么恢复？
 
-## TUI 交互说明
-
-- 默认采用“稳定模式”：数字输入 + 回车
-- 主菜单输入 `1-6` 进入模块，输入 `0` 返回/退出
-- 避免依赖方向键兼容性差异（尤其是 macOS 终端）
-
-## 项目结构
-
-```text
-easyclaw/
-├── easyclaw.py          # 统一入口（tui/web）
-├── cli.py               # 稳定模式主界面
-├── app.py               # 面板模式主界面
-├── install.sh           # 一键安装脚本（部署到 /root/.openclaw/easyclaw）
-├── core/                # 配置读写、执行器、搜索适配、同步等核心逻辑
-├── tui/                 # 各模块菜单与交互实现
-├── cmd/                 # 命令工具
-├── web/                 # Web 服务端
-└── tests/               # 回归测试
-```
-
-## 开发与测试
-
-```bash
-python3 -m unittest discover -s tests -p "test_*.py" -q
-```
-
-说明：
-
-- 部分测试依赖 `rich` 与 OpenClaw 可执行环境，建议在 Docker 目标环境中运行。
-
-## 提交范围约定
-
-当前仓库默认不提交以下目录/文件：
-
-- `openclaw_src/`
-- `docs/`
-- 调试/临时参考文件（见 `.gitignore`）
-
-## 许可证
-
-MIT
+A: 使用“服务配置 -> 配置备份与回滚”恢复最近备份。
