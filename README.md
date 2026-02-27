@@ -1,106 +1,133 @@
 # EasyClaw
 
-> ⚠️ **Status: Work in Progress** - 核心功能尚未完全走通，API 可能随时变更
+OpenClaw 的本地管理工具，提供稳定的数字输入 TUI（默认）和面板模式 TUI，用于统一管理模型、供应商、Agent、搜索服务与系统配置。
 
-OpenClaw 管理工具 - 同时支持 TUI（交互式菜单）和 CLI（命令行）两种模式
+## 当前能力
 
-## 功能特性
+- `📊 资产大盘`：查看模型状态、配额与关键摘要
+- `🧩 模型与供应商`：
+  - 供应商/模型资源库管理
+  - 全局模型优先级（主模型 + 备用链）
+  - 指定 Agent 模型优先级（覆盖全局）
+  - Spawn Agent 默认模型优先级（默认继承全局）
+- `🧭 Agent 与工作区`：
+  - 新增 Agent
+  - 工作区手动绑定/自动识别绑定
+  - 访问限制（仅工作区）与控制层快捷命令放行
+- `👥 Agent派发管理`：
+  - 派发开关
+  - 最大派发并发
+  - 固定 Agent 白名单
+  - 按 Agent 维度管理派发策略
+- `🛠️ 服务配置`：
+  - 工具配置（搜索服务、向量化）
+  - 搜索服务支持“官方 + 扩展源”统一配置
+  - 搜索服务主备切换（Primary/Fallback）
+- `🔌 自动化与集成`：
+  - 网关设置
+  - 系统辅助（Onboard/重启/回滚）
 
-- 📊 **资产大盘** - 查看账号状态、模型资产、用量配额
-- ⚙️ **资源库** - 管理服务商、账号、模型
-- 🤖 **任务指派** - 配置 Agent 模型路由
-- 🧭 **工具配置** - Web 搜索、向量化检索
-- 🌐 **网关设置** - 端口、绑定、认证
-- 🛠️ **系统辅助** - 重启、更新、回滚
+## 搜索服务能力
+
+### 官方搜索服务
+
+当前菜单内支持配置官方搜索服务：
+
+- `brave`
+- `perplexity`
+- `grok`
+- `gemini`
+- `kimi`
+
+### 扩展搜索服务（适配层）
+
+当前内置扩展适配：
+
+- `zhipu`
+- `serper`
+- `tavily`
+
+扩展配置文件：
+
+- `/root/.openclaw/easyclaw/search_adapters.json`（容器内路径）
+
+支持统一主备切换链：
+
+- `official:*` 与 `adapter:*` 可混合配置
+- 可演练 failover 验证切换行为
 
 ## 快速开始
 
 ### 环境要求
 
-- Python 3.8+
-- OpenClaw CLI 已安装
-- Linux/Docker 环境
+- Python 3.10+
+- OpenClaw CLI 可用（建议在容器内运行）
+- Linux/Docker（推荐）
 
-### 安装
-
-```bash
-# 克隆仓库
-git clone https://github.com/Gardma/easyclaw.git
-cd easyclaw
-
-# 创建虚拟环境
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 安装依赖
-pip install -e .
-```
-
-### 使用
+### 本地运行（当前目录）
 
 ```bash
-# TUI 模式（交互式菜单）
-easyclaw tui
-
-# CLI 模式
-# 查看状态
-easyclaw status
-
-# 列出模型
-easyclaw models list
-
-# 获取配置
-easyclaw config get agents.defaults.model
+python3 easyclaw.py tui
 ```
 
-## 键盘快捷键（TUI 模式）
+### 面板模式（可选）
 
-| 快捷键 | 功能 |
-|--------|------|
-| ↑↓ | 导航 |
-| Enter | 确认 |
-| Esc | 返回 |
-| q | 退出 |
-| r | 刷新 |
-| / | 搜索 |
-| 1-6 | 快速切换模块 |
+```bash
+EASYCLAW_TUI_MODE=panel python3 easyclaw.py tui
+```
+
+### Web 模式（可选）
+
+```bash
+python3 easyclaw.py web
+```
+
+### 在 Docker 容器中运行（示例）
+
+```bash
+docker exec -it easyclaw-web bash
+# 进入项目目录后运行
+python3 easyclaw.py tui
+```
+
+## TUI 交互说明
+
+- 默认采用“稳定模式”：数字输入 + 回车
+- 主菜单输入 `1-6` 进入模块，输入 `0` 返回/退出
+- 避免依赖方向键兼容性差异（尤其是 macOS 终端）
 
 ## 项目结构
 
-```
+```text
 easyclaw/
-├── cli.py              # 入口
-├── core/               # 核心模块
-│   ├── __init__.py     # 配置和 API
-├── tui/                # TUI 模块
-│   ├── app.py          # 主程序
-├── cmd/                # CLI 命令
-│   ├── status.py
-│   ├── models.py
-│   ├── account.py
-│   ├── config.py
-│   └── install.py
-└── .venv/             # 虚拟环境
+├── easyclaw.py          # 统一入口（tui/web）
+├── cli.py               # 稳定模式主界面
+├── app.py               # 面板模式主界面
+├── core/                # 配置读写、执行器、搜索适配、同步等核心逻辑
+├── tui/                 # 各模块菜单与交互实现
+├── cmd/                 # 命令工具
+├── web/                 # Web 服务端
+├── webui/               # Web UI 相关资源
+└── test_*.py            # 回归测试
 ```
 
-## 开发状态
+## 开发与测试
 
-⚠️ **当前阶段：核心功能开发中**
+```bash
+python3 -m unittest discover -p "test_*.py" -q
+```
 
-- [x] 项目基础架构
-- [x] TUI 界面框架
-- [x] CLI 命令结构
-- [ ] API 集成完全走通
-- [ ] 配置管理完善
-- [ ] 测试覆盖
+说明：
 
-**已知问题**：
-- 部分 OpenClaw 配置校验尚未完全兼容
-- 服务商管理 API 调用可能不稳定
+- 部分测试依赖 `rich` 与 OpenClaw 可执行环境，建议在 Docker 目标环境中运行。
 
-## 贡献
+## 提交范围约定
 
-欢迎提交 Issue 和 PR！由于项目处于早期阶段，API 可能随时变更。
+当前仓库默认不提交以下目录/文件：
+
+- `openclaw_src/`
+- `docs/`
+- 调试/临时参考文件（见 `.gitignore`）
 
 ## 许可证
 
