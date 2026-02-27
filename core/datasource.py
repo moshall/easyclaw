@@ -41,7 +41,8 @@ def _normalize_models(models: List[Dict], provider: str) -> List[Dict]:
         key = m.get("key") or m.get("id") or m.get("name")
         if not key:
             continue
-        if "/" not in key:
+        # 自定义端点返回 "vendor/model" 时，也要归属到当前 provider。
+        if not str(key).startswith(f"{provider}/"):
             key = f"{provider}/{key}"
         out.append({
             "key": key,
@@ -52,16 +53,22 @@ def _normalize_models(models: List[Dict], provider: str) -> List[Dict]:
 
 
 def get_official_models(provider: str) -> List[Dict]:
-    # 优先读 models.json（官方链路）
+    # 优先实时查询 CLI，避免被本地缓存的 models.json（例如仅含 openrouter/auto）误导
+    stdout, stderr, code = run_cli(["models", "list", "--all", "--provider", provider, "--json"])
+    if code == 0 and stdout:
+        try:
+            data = json.loads(stdout)
+            models = _normalize_models(data.get("models", []), provider)
+            if models:
+                return models
+        except Exception:
+            pass
+
+    # fallback 到 models.json（离线/CLI 失败场景）
     models = _load_models_json_provider(provider)
     if models:
         return _normalize_models(models, provider)
-    # fallback to CLI
-    stdout, stderr, code = run_cli(["models", "list", "--all", "--provider", provider, "--json"])
-    if code != 0 or not stdout:
-        return []
-    data = json.loads(stdout)
-    return _normalize_models(data.get("models", []), provider)
+    return []
 
 
 def get_custom_models(provider: str, base_url: str, api_key: str = "") -> List[Dict]:

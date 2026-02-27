@@ -2,6 +2,7 @@
 网关设置 (Gateway) 模块 - 端口、绑定、认证、WebUI
 """
 from typing import Dict
+from core.utils import safe_input, pause_enter
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -13,12 +14,6 @@ from core import run_cli, run_cli_json
 
 console = Console()
 
-
-def safe_safe_input(prompt=""):
-    try:
-        return safe_input(prompt)
-    except (EOFError, KeyboardInterrupt):
-        return ""
 
 
 
@@ -125,7 +120,7 @@ def set_gateway_port():
     else:
         console.print("\n[bold red]❌ 无效端口[/]")
     
-        safe_input("\n按回车键继续...")
+        pause_enter()
 
 
 def set_gateway_bind():
@@ -167,7 +162,7 @@ def set_gateway_bind():
         
         console.print("\n[yellow]⚠️ 需要重启服务后生效[/]")
     
-        safe_input("\n按回车键继续...")
+        pause_enter()
 
 
 def set_gateway_auth():
@@ -213,7 +208,7 @@ def set_gateway_auth():
         
         console.print("\n[yellow]⚠️ 需要重启服务后生效[/]")
     
-        safe_input("\n按回车键继续...")
+        pause_enter()
 
 
 def set_trusted_proxies():
@@ -254,7 +249,7 @@ def set_trusted_proxies():
         console.print(f"\n[bold red]❌ 设置失败: {err}[/]")
     
     console.print("\n[yellow]⚠️ 需要重启服务后生效[/]")
-    safe_input("\n按回车键继续...")
+    pause_enter()
 
 
 def set_webui_toggle():
@@ -282,7 +277,7 @@ def set_webui_toggle():
         console.print(f"\n[bold red]❌ 设置失败: {err}[/]")
     
     console.print("\n[yellow]⚠️ 需要重启服务后生效[/]")
-    safe_input("\n按回车键继续...")
+    pause_enter()
 
 
 if __name__ == "__main__":

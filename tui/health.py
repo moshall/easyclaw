@@ -3,6 +3,7 @@
 优化版：进度条、颜色强化、小贴士、模型可用状态、Key 探测
 修复版：修正 JSON 解析逻辑
 """
+from core.utils import safe_input, pause_enter
 import os
 import json
 import time
@@ -26,14 +27,6 @@ from core import (
 )
 
 console = Console()
-
-
-def safe_safe_input(prompt=""):
-    try:
-        return safe_input(prompt)
-    except (EOFError, KeyboardInterrupt):
-        return ""
-
 
 
 def show_health_dashboard():
@@ -377,7 +370,7 @@ def probe_auth_status():
         console.print(f"\n[bold red]❌ 探测失败: {e}[/]")
     
     console.print()
-    safe_input("[dim]按回车键返回...[/]")
+    pause_enter("[dim]按回车键返回...[/]")
 
 
 if __name__ == "__main__":

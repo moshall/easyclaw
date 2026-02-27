@@ -50,3 +50,13 @@ htmlcov/
 # Uncomment if you want to ignore config files
 # config.json
 # *.env
+
+# Local reference/source mirrors (do not sync)
+openclaw_src/
+docs/
+findings.md
+progress.md
+task_plan.md
+auth-choice-options.ts
+fix.py
+mock_openclaw.py

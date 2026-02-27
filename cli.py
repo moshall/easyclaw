@@ -6,6 +6,7 @@ EasyClaw - OpenClaw 管理 CLI 工具
 import argparse
 import os
 import sys
+from datetime import datetime
 
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -20,103 +21,128 @@ from rich.text import Text
 from rich.prompt import Prompt, Confirm
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import box
+from rich.layout import Layout
+from rich.align import Align
 
-console = Console(force_terminal=True, width=80)
+console = Console(force_terminal=True)
 
 # ========== 导入新模块 ==========
 from tui.health import show_health_dashboard
-from tui.inventory import menu_inventory
-from tui.tools import menu_tools
-from tui.routing import menu_routing
-from tui.gateway import menu_gateway
-from tui.system import menu_system
+from tui.navigation import (
+    menu_model_provider,
+    menu_agent_workspace,
+    menu_subagent_control,
+    menu_automation_integration,
+    menu_service_config,
+)
+from tui.routing import get_default_model, get_fallbacks
+
+
+def _build_main_layout() -> Layout:
+    now = datetime.now().strftime("%H:%M:%S")
+    layout = Layout()
+    layout.split(
+        Layout(name="header", size=3),
+        Layout(name="body", ratio=1),
+        Layout(name="footer", size=3),
+    )
+    layout["body"].split_row(
+        Layout(name="menu", size=34),
+        Layout(name="content", ratio=1),
+    )
+
+    header = Panel(
+        Text.assemble(
+            ("EasyClaw", "bold cyan"),
+            ("  ", ""),
+            ("OpenClaw 管理面板", "dim"),
+            ("   ", ""),
+            (now, "bold green"),
+            justify="center",
+        ),
+        box=box.DOUBLE,
+        border_style="cyan",
+        padding=(0, 1),
+    )
+    layout["header"].update(header)
+
+    menu_table = Table(box=box.SIMPLE_HEAVY, border_style="blue", pad_edge=True)
+    menu_table.add_column("编号", style="bold cyan", width=6, justify="center", no_wrap=True)
+    menu_table.add_column("模块", style="bold", min_width=22, no_wrap=True)
+    menu_table.add_row("[1]", "📊  资产大盘")
+    menu_table.add_row("[2]", "🧩  模型与供应商")
+    menu_table.add_row("[3]", "🧭  Agent 与工作区")
+    menu_table.add_row("[4]", "👥  Agent 派发管理")
+    menu_table.add_row("[5]", "🛠️  服务配置")
+    menu_table.add_row("[6]", "🔌  自动化与集成")
+    menu_table.add_row("[0]", "👋  退出")
+    layout["menu"].update(Panel(menu_table, border_style="blue", box=box.ROUNDED, title="操作菜单"))
+
+    default_model = get_default_model() or "(未设置)"
+    fallbacks = get_fallbacks()
+    fallback_text = " -> ".join(fallbacks[:3]) if fallbacks else "(未设置)"
+    if len(fallbacks) > 3:
+        fallback_text += " -> ..."
+    guidance = Table.grid(padding=(0, 1))
+    guidance.add_row(Text("模块说明", style="bold", overflow="fold", no_wrap=False))
+    guidance.add_row(Text("1. 资产大盘: 账号状态 / 模型用量 / 子 Agent", overflow="fold", no_wrap=False))
+    guidance.add_row(Text("2. 模型与供应商: 供应商、模型激活、主备模型", overflow="fold", no_wrap=False))
+    guidance.add_row(Text("3. Agent 与工作区: 创建主 Agent、绑定 workspace", overflow="fold", no_wrap=False))
+    guidance.add_row(Text("4. Agent 派发管理: 派发开关、并发、固定 Agent 白名单", overflow="fold", no_wrap=False))
+    guidance.add_row(Text("5. 服务配置: 搜索服务 / 向量化等工具配置", overflow="fold", no_wrap=False))
+    guidance.add_row(Text("6. 自动化与集成: 网关 / 系统", overflow="fold", no_wrap=False))
+    guidance.add_row("")
+    guidance.add_row(Text("当前全局模型", style="bold", overflow="fold", no_wrap=False))
+    guidance.add_row(Text(default_model, style="green", overflow="fold", no_wrap=False))
+    guidance.add_row("")
+    guidance.add_row(Text("当前备用链", style="bold", overflow="fold", no_wrap=False))
+    guidance.add_row(Text(fallback_text, style="cyan", overflow="fold", no_wrap=False))
+    guidance.add_row("")
+    guidance.add_row(Text("使用方式", style="bold", overflow="fold", no_wrap=False))
+    guidance.add_row(Text("输入数字后回车，直接进入对应模块", overflow="fold", no_wrap=False))
+    guidance.add_row(Text("示例: 输入 2 进入模型与供应商管理", overflow="fold", no_wrap=False))
+    guidance.add_row(Text("输入 0 退出", overflow="fold", no_wrap=False))
+    layout["content"].update(Panel(Align.left(guidance), box=box.ROUNDED, border_style="green", title="状态与指引"))
+
+    footer = Panel(
+        Text("稳定模式: 纯数字输入（不依赖方向键兼容）", justify="center", style="dim"),
+        box=box.ROUNDED,
+        border_style="grey50",
+    )
+    layout["footer"].update(footer)
+    return layout
 
 
 def menu_main():
     """主菜单"""
     while True:
         console.clear()
-        
-        # 简洁标题
-        console.print()
-        console.print("[bold cyan]========== EasyClaw - OpenClaw 管理面板 ==========[/]")
-        console.print()
-        
-        # 功能列表（简单文本）
-        console.print("[bold]功能菜单:[/]")
-        console.print("  [cyan]1[/] 资源库       服务商/账号/模型管理")
-        console.print("  [cyan]2[/] 资产大盘     账号状态/模型用量/子 Agent")
-        console.print("  [cyan]3[/] 任务指派     Agent 模型路由配置")
-        console.print("  [cyan]4[/] 子 Agent     开关/并发/白名单")
-        console.print("  [cyan]5[/] 工具箱       日志清理/备份/配置向导")
-        console.print("  [cyan]6[/] 网关设置     模式切换/端口/SSL")
-        console.print("  [cyan]7[/] 快速操作     常用命令快捷入口")
-        console.print("  [cyan]s[/] 状态速览     一键看全局健康")
-        console.print("  [cyan]0[/] 退出")
+        console.print(_build_main_layout())
         console.print()
         
         # 获取用户输入
-        choice = Prompt.ask("[bold yellow]请选择[/]", choices=["0", "1", "2", "3", "4", "5", "6", "7", "s"], default="0")
+        choice = Prompt.ask("[bold yellow]请选择[/]", choices=["0", "1", "2", "3", "4", "5", "6"], default="0")
         
         if choice == '0':
             console.print("[bold cyan]👋 再见![/]")
             break
         elif choice == '1':
-            menu_inventory()
-        elif choice == '2':
             show_health_dashboard()
+        elif choice == '2':
+            menu_model_provider()
         elif choice == '3':
-            menu_routing()
+            menu_agent_workspace()
         elif choice == '4':
-            menu_subagent()
+            menu_subagent_control()
         elif choice == '5':
-            menu_tools()
+            menu_service_config()
         elif choice == '6':
-            menu_gateway()
-        elif choice == '7':
-            menu_quick_actions()
-        elif choice == 's':
-            show_status()
-
-
-def menu_routing():
-    """任务指派"""
-    from tui.routing import menu_routing as routing_menu
-    routing_menu()
-
-
-def menu_subagent():
-    """子 Agent（占位符，待移植）"""
-    console.print("\n[yellow]⏳ 子 Agent 模块待移植...[/]")
-    console.input("\n[dim]按回车键继续...[/]")
-
-
-def menu_gateway():
-    """网关设置"""
-    from tui.gateway import menu_gateway as gateway_menu
-    gateway_menu()
-
-
-def menu_system():
-    """系统辅助"""
-    from tui.system import menu_system as system_menu
-    system_menu()
-
-
-def menu_quick_actions():
-    """快速操作菜单"""
-    try:
-        from tui.quick_actions import show
-        show()
-    except ImportError as e:
-        console.print(f"\n[bold red]错误: 无法加载快速操作模块 - {e}[/]")
-        console.input("\n[dim]按回车键继续...[/]")
+            menu_automation_integration()
 
 
 def show_status():
-    """快速状态（占位符，待移植）"""
-    console.print("\n[yellow]⏳ 快速状态模块待移植...[/]")
-    console.input("\n[dim]按回车键继续...[/]")
+    """状态入口（当前直接复用资产大盘）"""
+    show_health_dashboard()
 
 
 # ========== 入口 ==========

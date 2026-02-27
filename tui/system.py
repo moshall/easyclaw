@@ -1,6 +1,7 @@
 """
 系统辅助 (System) 模块 - 重启、更新、回滚、Onboard
 """
+from core.utils import safe_input, pause_enter
 import os
 import glob
 import subprocess
@@ -18,12 +19,6 @@ from core import run_cli, DEFAULT_CONFIG_PATH, DEFAULT_BACKUP_DIR, OPENCLAW_BIN
 console = Console()
 
 
-def safe_safe_input(prompt=""):
-    try:
-        return safe_input(prompt)
-    except (EOFError, KeyboardInterrupt):
-        return ""
-
 
 
 def menu_system():
@@ -36,23 +31,20 @@ def menu_system():
         
         console.print("[bold]功能:[/]")
         console.print("  [cyan]1[/] 🔄 重启/重载配置")
-        console.print("  [cyan]2[/] 🚀 检查系统更新")
-        console.print("  [cyan]3[/] 🛡️ 配置回滚")
-        console.print("  [cyan]4[/] 🧙 重新运行 Onboard 向导")
+        console.print("  [cyan]2[/] 🛡️ 配置回滚")
+        console.print("  [cyan]3[/] 🧙 重新运行 Onboard 向导")
         console.print("  [cyan]0[/] 返回")
         console.print()
         
-        choice = Prompt.ask("[bold green]>[/]", choices=["0", "1", "2", "3", "4"], default="0")
+        choice = Prompt.ask("[bold green]>[/]", choices=["0", "1", "2", "3"], default="0")
         
         if choice == "0":
             break
         elif choice == "1":
             restart_gateway()
         elif choice == "2":
-            check_update()
-        elif choice == "3":
             rollback_config()
-        elif choice == "4":
+        elif choice == "3":
             run_onboard()
 
 
@@ -137,7 +129,7 @@ def restart_gateway():
                     console.print("\n[yellow]⚠️ 未找到 openclaw-gateway 进程[/]")
             except Exception as e:
                 console.print(f"\n[bold red]❌ 发送信号失败: {e}[/]")
-                safe_input("\n按回车键继续...")
+                pause_enter()
         elif choice == "2":
             console.print("\n[yellow]⚠️ 注意：在容器中直接重启进程可能会导致容器退出[/]")
             if Confirm.ask("[bold red]确定要继续吗?[/]", default=False):
@@ -146,14 +138,14 @@ def restart_gateway():
                 # 这里不实际执行，因为风险太大
                 console.print("[yellow]⚠️ 此操作在容器中风险较大，已跳过[/]")
                 console.print("-" * 40)
-                safe_input("\n按回车键继续...")
+                pause_enter()
         elif choice == "3":
             console.print(f"\n[yellow]⚠️ 容器重启需要在宿主机执行：[/]")
             console.print()
             console.print(f"   docker restart {container_name}")
             console.print()
             console.print("   或通过 1Panel 面板操作")
-            safe_input("\n按回车键继续...")
+            pause_enter()
     else:
         # 非 Docker 环境，显示原来的选项
         console.print("[bold]选择操作:[/]")
@@ -172,7 +164,7 @@ def restart_gateway():
             console.print("-" * 40)
             run_cli(["gateway", "restart"], capture=False)
             console.print("-" * 40)
-            safe_input("\n按回车键继续...")
+            pause_enter()
 
 
 def check_update():
@@ -190,7 +182,7 @@ def check_update():
     stdout, _, _ = run_cli(["update", "status"])
     console.print(stdout)
     
-    safe_input("\n按回车键继续...")
+    pause_enter()
 
 
 def rollback_config():
@@ -203,14 +195,14 @@ def rollback_config():
     
     if not os.path.exists(DEFAULT_BACKUP_DIR):
         console.print("\n[bold red]❌ 没有发现备份[/]")
-        safe_input("\n按回车键继续...")
+        pause_enter()
         return
     
     backups = sorted(glob.glob(f"{DEFAULT_BACKUP_DIR}/*.json.bak"), reverse=True)[:10]
     
     if not backups:
         console.print("\n[bold red]❌ 没有发现备份[/]")
-        safe_input("\n按回车键继续...")
+        pause_enter()
         return
     
     console.print()
@@ -243,7 +235,7 @@ def rollback_config():
                 import shutil
                 shutil.copy(backup_file, DEFAULT_CONFIG_PATH)
                 console.print("\n[green]✅ 已恢复，需要重启服务[/]")
-                safe_input("\n按回车键继续...")
+                pause_enter()
 
 
 def run_onboard():
@@ -268,9 +260,18 @@ def run_onboard():
     
     if Confirm.ask("[bold green]确定要启动吗?[/]", default=False):
         console.print()
-        run_cli(["onboard"], capture=False)
-        console.print("\n[yellow]⚠️ 配置变更需要重启服务后生效[/]")
-        safe_input("\n按回车键继续...")
+        _, err, code = run_cli(["onboard"], capture=False)
+        if code == 0:
+            console.print("\n[green]✅ Onboard 已完成[/]")
+            console.print("[yellow]⚠️ 配置变更需要重启服务后生效[/]")
+        else:
+            console.print(f"\n[bold red]❌ Onboard 执行失败 (exit={code})[/]")
+            if err:
+                console.print(f"[dim]原因: {err}[/]")
+        pause_enter()
+    else:
+        console.print("\n[yellow]已取消启动 Onboard[/]")
+        pause_enter()
 
 
 if __name__ == "__main__":

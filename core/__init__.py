@@ -122,28 +122,58 @@ class OpenClawConfig:
     
     def get_profiles_by_provider(self) -> dict:
         """按服务商归类账号"""
-        profiles = self.data.get("auth", {}).get("profiles", {})
+        merged_profiles = {}
+
+        # 1) openclaw.json 中的 auth.profiles（元信息）
+        profiles_in_config = self.data.get("auth", {}).get("profiles", {}) or {}
+        if isinstance(profiles_in_config, dict):
+            for key, info in profiles_in_config.items():
+                if isinstance(info, dict):
+                    merged_profiles[key] = dict(info)
+
+        # 2) auth-profiles.json（官方真实凭据存储）
+        try:
+            if os.path.exists(DEFAULT_AUTH_PROFILES_PATH):
+                with open(DEFAULT_AUTH_PROFILES_PATH, "r") as f:
+                    auth_data = json.load(f)
+                profiles_in_store = auth_data.get("profiles", {}) or {}
+                if isinstance(profiles_in_store, dict):
+                    for key, info in profiles_in_store.items():
+                        if not isinstance(info, dict):
+                            continue
+                        # 同 key 合并：auth-profiles.json 优先（包含 type/key/token 等）
+                        merged = dict(merged_profiles.get(key, {}))
+                        merged.update(info)
+                        merged_profiles[key] = merged
+        except Exception:
+            # 账号统计不应因凭据文件异常中断 UI
+            pass
+
         pool = {}
-        for key, info in profiles.items():
-            provider = info.get("provider", "unknown")
+        for key, info in merged_profiles.items():
+            provider = normalize_provider_name(info.get("provider", "unknown")) or "unknown"
             if provider not in pool:
                 pool[provider] = []
-            info['_key'] = key
-            pool[provider].append(info)
+            row = dict(info)
+            row["_key"] = key
+            pool[provider].append(row)
         return pool
     
     def get_models_by_provider(self) -> dict:
         """按服务商归类模型"""
         models = self.data.get("agents", {}).get("defaults", {}).get("models", {})
         pool = {}
-        
+
         for full_name, info in models.items():
             if "/" in full_name:
                 provider, model_name = full_name.split("/", 1)
             else:
                 provider = info.get("provider", "其他")
                 model_name = full_name
-            
+
+            provider = normalize_provider_name(provider) or "其他"
+            model_name = str(model_name).strip("'\"")
+
             if provider not in pool:
                 pool[provider] = []
             
@@ -182,14 +212,23 @@ def run_cli(args: list, capture: bool = True) -> tuple:
     cmd = [OPENCLAW_BIN] + args
     
     try:
+        if capture:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                shell=False,
+                timeout=30
+            )
+            return result.stdout.strip(), result.stderr.strip(), result.returncode
+
+        # 交互式命令：直连当前终端，不捕获输出，避免向导类命令被阻塞
         result = subprocess.run(
-            cmd, 
-            capture_output=True, 
-            text=True, 
+            cmd,
             shell=False,
-            timeout=30
+            timeout=None
         )
-        return result.stdout.strip(), result.stderr.strip(), result.returncode
+        return "", "", result.returncode
     except subprocess.TimeoutExpired:
         return "", "命令执行超时", 1
     except Exception as e:
@@ -266,8 +305,8 @@ def sanitize_auth_profiles(provider_name: Optional[str] = None) -> List[str]:
 def normalize_provider_name(name: str) -> str:
     """标准化服务商名称"""
     name = (name or "").strip()
-    if len(name) >= 2 and name[0] == '"' and name[-1] == '"':
-        name = name[1:-1].strip()
+    # 清理历史脏数据中的引号残留（'openrouter / "openrouter / "openrouter"）
+    name = name.strip("'\"").strip()
     return name
 
 
@@ -430,48 +469,149 @@ VOYAGE_API_KEY=...
 # ========== 扩展 OpenClawConfig 方法 ==========
 
 def get_subagent_status(self) -> Dict:
-    """获取当前子 Agent 策略状态"""
-    defaults = self.data.get("agents", {}).get("defaults", {}).get("subagents", {})
-    max_c = defaults.get("maxConcurrent", 8)
-    
+    """兼容接口：获取 main（或首个）子 Agent 策略状态"""
+    return get_subagent_status_for(self, agent_id="main")
+
+
+def _resolve_agent_index(self, agent_id: Optional[str]) -> int:
+    agents_list = self.data.get("agents", {}).get("list", []) or []
+    if not isinstance(agents_list, list) or not agents_list:
+        return -1
+    if agent_id:
+        for idx, agent in enumerate(agents_list):
+            if isinstance(agent, dict) and agent.get("id") == agent_id:
+                return idx
+    for idx, agent in enumerate(agents_list):
+        if isinstance(agent, dict) and agent.get("id") == "main":
+            return idx
+    return 0
+
+
+def get_subagent_status_for(self, agent_id: Optional[str] = None) -> Dict:
+    """按主 Agent 获取子 Agent 策略状态"""
+    defaults = self.data.get("agents", {}).get("defaults", {}).get("subagents", {}) or {}
+    global_max = defaults.get("maxConcurrent", 8)
+    agents_list = self.data.get("agents", {}).get("list", []) or []
+    idx = _resolve_agent_index(self, agent_id)
+
     allow_agents = []
-    for agent in self.data.get("agents", {}).get("list", []):
-        if agent.get("id") == "main":
-            allow_agents = agent.get("subagents", {}).get("allowAgents", [])
-    
-    is_enabled = len(allow_agents) > 0
+    max_c = global_max
+    resolved_id = "main" if agent_id else "main"
+    max_from = "global"
+    if 0 <= idx < len(agents_list):
+        agent = agents_list[idx] if isinstance(agents_list[idx], dict) else {}
+        resolved_id = str(agent.get("id", resolved_id) or resolved_id)
+        sub = agent.get("subagents", {}) if isinstance(agent.get("subagents"), dict) else {}
+        allow_agents = sub.get("allowAgents", []) if isinstance(sub.get("allowAgents", []), list) else []
+        if isinstance(sub.get("maxConcurrent"), int):
+            max_c = sub.get("maxConcurrent")
+            max_from = "agent"
+
     return {
-        "enabled": is_enabled,
+        "agentId": resolved_id,
+        "enabled": len(allow_agents) > 0,
         "allowAgents": allow_agents,
-        "maxConcurrent": max_c
+        "maxConcurrent": max_c,
+        "maxConcurrentFrom": max_from,
     }
 
 
 def update_subagent_global(self, allow_agents: Optional[List] = None, max_concurrent: Optional[int] = None) -> bool:
-    """更新子 Agent 全局策略"""
+    """兼容接口：更新 main（或首个）子 Agent 策略"""
+    agents_list = self.data.get("agents", {}).get("list", []) or []
+    resolved_id = "main"
+    idx = _resolve_agent_index(self, "main")
+    if 0 <= idx < len(agents_list):
+        agent = agents_list[idx]
+        if isinstance(agent, dict) and agent.get("id"):
+            resolved_id = str(agent.get("id"))
+    return update_subagent_for(self, agent_id=resolved_id, allow_agents=allow_agents, max_concurrent=max_concurrent)
+
+
+def update_subagent_for(
+    self,
+    agent_id: str,
+    allow_agents: Optional[List] = None,
+    max_concurrent: Optional[int] = None,
+    inherit_max_concurrent: bool = False,
+) -> bool:
+    """按主 Agent 更新子 Agent 策略"""
     success = True
-    
+    agents = self.data.setdefault("agents", {})
+    agents_list = agents.get("list")
+    if not isinstance(agents_list, list):
+        agents_list = []
+        agents["list"] = agents_list
+    agent_index = -1
+    try:
+        for idx, agent in enumerate(agents_list):
+            if isinstance(agent, dict) and agent.get("id") == agent_id:
+                agent_index = idx
+                break
+    except Exception:
+        agent_index = -1
+    if agent_index < 0:
+        agents_list.append({"id": agent_id})
+        agent_index = len(agents_list) - 1
+
     if allow_agents is not None:
-        # 使用 CLI 设置 allowAgents
         allow_json = json.dumps(allow_agents)
-        _, _, retcode = run_cli(["config", "set", "agents.list[0].subagents.allowAgents", allow_json, "--json"])
+        path = f"agents.list[{agent_index}].subagents.allowAgents"
+        _, _, retcode = run_cli(["config", "set", path, allow_json, "--json"])
         if retcode != 0:
-            success = False
-    
-    if max_concurrent is not None:
-        # 使用 CLI 设置 maxConcurrent
-        _, _, retcode = run_cli(["config", "set", "agents.defaults.subagents.maxConcurrent", str(max_concurrent), "--json"])
+            try:
+                agent = agents_list[agent_index]
+                if not isinstance(agent, dict):
+                    agent = {"id": agent_id}
+                    agents_list[agent_index] = agent
+                subagents = agent.get("subagents")
+                if not isinstance(subagents, dict):
+                    subagents = {}
+                    agent["subagents"] = subagents
+                subagents["allowAgents"] = allow_agents
+                if not self.save():
+                    success = False
+            except Exception:
+                success = False
+
+    if inherit_max_concurrent:
+        path = f"agents.list[{agent_index}].subagents.maxConcurrent"
+        _, _, retcode = run_cli(["config", "unset", path])
         if retcode != 0:
-            success = False
+            try:
+                agent = agents_list[agent_index] if isinstance(agents_list[agent_index], dict) else {"id": agent_id}
+                sub = agent.get("subagents") if isinstance(agent.get("subagents"), dict) else {}
+                sub.pop("maxConcurrent", None)
+                agent["subagents"] = sub
+                agents_list[agent_index] = agent
+                if not self.save():
+                    success = False
+            except Exception:
+                success = False
+    elif max_concurrent is not None:
+        path = f"agents.list[{agent_index}].subagents.maxConcurrent"
+        _, _, retcode = run_cli(["config", "set", path, str(max_concurrent), "--json"])
+        if retcode != 0:
+            try:
+                agent = agents_list[agent_index] if isinstance(agents_list[agent_index], dict) else {"id": agent_id}
+                sub = agent.get("subagents") if isinstance(agent.get("subagents"), dict) else {}
+                sub["maxConcurrent"] = int(max_concurrent)
+                agent["subagents"] = sub
+                agents_list[agent_index] = agent
+                if not self.save():
+                    success = False
+            except Exception:
+                success = False
     
-    # 刷新本地缓存
     self.reload()
     return success
 
 
 # 动态绑定方法
 OpenClawConfig.get_subagent_status = get_subagent_status
+OpenClawConfig.get_subagent_status_for = get_subagent_status_for
 OpenClawConfig.update_subagent_global = update_subagent_global
+OpenClawConfig.update_subagent_for = update_subagent_for
 
 # 全局配置实例
 config = OpenClawConfig()

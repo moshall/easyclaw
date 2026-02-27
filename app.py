@@ -8,6 +8,9 @@ import os
 import sys
 from typing import Optional, Dict, Any
 from datetime import datetime
+import select
+import termios
+import tty
 
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -26,12 +29,13 @@ from rich.style import Style
 from core import config
 
 console = Console()
+NAV_MODE = os.environ.get("EASYCLAW_NAV_MODE", "line").strip().lower()  # line | keys
 
 
 class AppState:
     """应用状态管理"""
     def __init__(self):
-        self.current_screen: str = "main"  # main | health | inventory | routing | tools | gateway | system
+        self.current_screen: str = "main"  # main | health | models | agent_workspace | subagent | services | automation
         self.last_update: datetime = datetime.now()
         self.notification: Optional[str] = None
         self.notification_level: str = "info"  # info | success | warning | error
@@ -68,33 +72,31 @@ def make_header(state: AppState) -> RenderableType:
 def make_sidebar(state: AppState) -> RenderableType:
     """渲染侧边栏菜单（更好的视觉引导）"""
     menu_items = [
-        ("1", "📊 资产大盘", "health", "查看账号状态和模型用量"),
-        ("2", "⚙️ 资源库", "inventory", "管理服务商、账号和模型"),
-        ("3", "🤖 任务指派", "routing", "设置默认模型和备选链"),
-        ("4", "🧭 工具配置", "tools", "配置 Web 搜索和向量化"),
-        ("5", "🌐 网关设置", "gateway", "配置端口、绑定和认证"),
-        ("6", "🛠️ 系统辅助", "system", "重启、更新、回滚等"),
-        ("0", "👋 退出", "exit", "退出 EasyClaw"),
+        ("1", "📊  资产大盘", "health"),
+        ("2", "🧩  模型与供应商", "models"),
+        ("3", "🧭  Agent 与工作区", "agent_workspace"),
+        ("4", "👥  Agent 派发管理", "subagent"),
+        ("5", "🛠️  服务配置", "services"),
+        ("6", "🔌  自动化与集成", "automation"),
+        ("0", "👋  退出", "exit"),
     ]
     
     table = Table(box=box.ROUNDED, border_style="cyan", show_header=False, expand=True)
     table.add_column("Key", style="cyan", width=4)
-    table.add_column("功能", style="bold")
-    table.add_column("说明", style="dim", ratio=1)
+    table.add_column("功能", style="bold", ratio=1)
     
-    for key, label, screen, desc in menu_items:
+    for key, label, screen in menu_items:
         is_active = state.current_screen == screen
         style = "reverse" if is_active else ""
         
         key_text = Text(f"[{key}]", style=style)
         label_text = Text(label, style=style)
-        desc_text = Text(desc, style="dim" if not is_active else style)
         
-        table.add_row(key_text, label_text, desc_text)
+        table.add_row(key_text, label_text)
     
     title = Text.assemble(
         Text("菜单 ", style="bold"),
-        Text("(按数字键直接选择)", style="dim")
+        Text("(数字键或 ↑↓)", style="dim")
     )
     
     return Panel(table, title=title, border_style="cyan", padding=(1, 1))
@@ -146,11 +148,11 @@ def make_main_content(state: AppState) -> RenderableType:
         # 其他屏幕显示提示（更友好）
         screen_name_map = {
             "health": ("📊 资产大盘", "查看所有模型账号、用量配额"),
-            "inventory": ("⚙️ 资源库", "管理服务商、绑定账号、激活模型"),
-            "routing": ("🤖 任务指派", "设置默认模型、备选链、子 Agent"),
-            "tools": ("🧭 工具配置", "配置 Web 搜索、向量化检索"),
-            "gateway": ("🌐 网关设置", "配置端口、绑定地址、认证方式"),
-            "system": ("🛠️ 系统辅助", "重启服务、检查更新、配置回滚"),
+            "models": ("🧩 模型与供应商", "管理服务商、激活模型、主备模型"),
+            "agent_workspace": ("🧭 Agent 与工作区", "创建主 Agent、绑定 workspace、初始化模板"),
+            "subagent": ("👥 Agent 派发管理", "派发开关、并发上限、固定 Agent 白名单"),
+            "services": ("🛠️ 服务配置", "搜索服务、向量化等工具配置"),
+            "automation": ("🔌 自动化与集成", "网关、系统"),
         }
         
         screen_name, screen_desc = screen_name_map.get(state.current_screen, (state.current_screen, ""))
@@ -196,9 +198,13 @@ def make_notification(state: AppState) -> Optional[RenderableType]:
 
 def make_footer() -> RenderableType:
     """渲染底部提示栏（更清晰）"""
+    if NAV_MODE == "keys":
+        hint = "[1-6/↑↓/j/k] 选择功能  |  [Enter/e/l/o/→] 进入完整界面  |  [0] 返回/退出"
+    else:
+        hint = "[1-6] 选择功能  |  [Enter] 进入完整界面  |  [0] 返回/退出"
     return Panel(
         Text(
-            "[1-6] 选择功能  |  [Enter] 进入完整界面  |  [0] 返回/退出",
+            hint,
             style="dim",
             justify="center"
         ),
@@ -230,29 +236,117 @@ def make_layout(state: AppState) -> Layout:
 def launch_full_module(screen: str):
     """启动完整功能模块（临时离开 Live）"""
     console.clear()
+
+
+def _read_menu_key() -> str:
+    """读取单键输入。返回: UP/DOWN/ENTER/0-6/UNKNOWN"""
+    if NAV_MODE != "keys":
+        # 稳定模式：读取整行，取首个有效字符，避免 Prompt.ask 在某些 TTY 里丢值
+        try:
+            raw = sys.stdin.readline()
+        except Exception:
+            return "UNKNOWN"
+        if raw is None:
+            return "UNKNOWN"
+        s = raw.strip()
+        if s == "":
+            return "ENTER"
+        c = s[0]
+        if c in "0123456":
+            return c
+        return "UNKNOWN"
+
+    if not sys.stdin.isatty():
+        choice = Prompt.ask("", choices=["0", "1", "2", "3", "4", "5", "6", ""], default="", show_choices=False)
+        return "ENTER" if choice == "" else choice
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        # 读取一个小批次字节，避免分段读导致 ESC 序列解析不完整
+        if not select.select([sys.stdin], [], [], 0.5)[0]:
+            return "UNKNOWN"
+        data = os.read(fd, 32)
+        if not data:
+            return "UNKNOWN"
+
+        if b"\x03" in data:
+            raise KeyboardInterrupt
+
+        # 数字键
+        for d in b"012345":
+            if bytes([d]) == data or data.startswith(bytes([d])):
+                return chr(d)
+
+        # 回车（含 keypad enter 常见序列）
+        if data in (b"\r", b"\n", b"\r\n") or data.endswith(b"\r") or data.endswith(b"\n"):
+            return "ENTER"
+        if b"\x1bOM" in data or b"[13~" in data:
+            return "ENTER"
+
+        # vim 风格备用键
+        if data[:1] in (b"k", b"K"):
+            return "UP"
+        if data[:1] in (b"j", b"J"):
+            return "DOWN"
+        if data[:1] in (b"l", b"L", b"e", b"E", b"o", b"O", b" "):
+            return "ENTER"
+
+        # 方向右键也作为进入
+        if b"[C" in data or b"OC" in data:
+            return "ENTER"
+
+        # 一些终端的 Enter 可能被编码到更长序列中，兜底识别 "13~"
+        if b"13~" in data:
+            return "ENTER"
+
+        # 方向键（兼容 ESC [ A/B 与 ESC O A/B，及混合前缀）
+        if b"[A" in data or b"OA" in data:
+            return "UP"
+        if b"[B" in data or b"OB" in data:
+            return "DOWN"
+
+        return "UNKNOWN"
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
     
     # 导入模块
     from tui.health import show_health_dashboard
-    from tui.inventory import menu_inventory
-    from tui.routing import menu_routing
-    from tui.tools import menu_tools
-    from tui.gateway import menu_gateway
-    from tui.system import menu_system
+    from tui.navigation import (
+        menu_model_provider,
+        menu_agent_workspace,
+        menu_subagent_control,
+        menu_service_config,
+        menu_automation_integration,
+    )
     
     # 模块映射
     module_map = {
         "health": show_health_dashboard,
-        "inventory": menu_inventory,
-        "routing": menu_routing,
-        "tools": menu_tools,
-        "gateway": menu_gateway,
-        "system": menu_system,
+        "models": menu_model_provider,
+        "agent_workspace": menu_agent_workspace,
+        "subagent": menu_subagent_control,
+        "services": menu_service_config,
+        "automation": menu_automation_integration,
     }
     
     if screen in module_map:
         module_map[screen]()
     
     console.clear()
+
+
+def _drain_stdin_buffer():
+    """清空 stdin 缓冲，避免回车残留导致子菜单瞬间返回。"""
+    if not sys.stdin.isatty():
+        return
+    fd = sys.stdin.fileno()
+    try:
+        while select.select([sys.stdin], [], [], 0.0)[0]:
+            os.read(fd, 256)
+    except Exception:
+        pass
 
 
 def main():
@@ -264,13 +358,14 @@ def main():
     # 定义屏幕映射
     screen_map = {
         "1": "health",
-        "2": "inventory",
-        "3": "routing",
-        "4": "tools",
-        "5": "gateway",
-        "6": "system",
+        "2": "models",
+        "3": "agent_workspace",
+        "4": "subagent",
+        "5": "services",
+        "6": "automation",
         "0": "exit",
     }
+    nav_order = ["health", "models", "agent_workspace", "subagent", "services", "automation", "exit"]
     
     try:
         with Live(make_layout(state), console=console, auto_refresh=False, screen=True) as live:
@@ -279,33 +374,54 @@ def main():
                 live.update(make_layout(state))
                 live.refresh()
                 
-                # 等待用户输入（更清晰的提示）
-                choice = Prompt.ask(
-                    "",
-                    choices=["0", "1", "2", "3", "4", "5", "6", ""],
-                    default="",
-                    show_choices=False
-                )
-                
+                key = _read_menu_key()
+
                 # 处理输入
-                if choice == "":
+                if key == "ENTER":
                     # Enter 键 - 如果在非主界面，进入完整模块
-                    if state.current_screen != "main" and state.current_screen != "exit":
+                    if state.current_screen == "exit":
+                        console.clear()
+                        console.print("[bold cyan]👋 再见![/]")
+                        return
+                    if state.current_screen != "main":
+                        _drain_stdin_buffer()
                         live.stop()
                         launch_full_module(state.current_screen)
                         state.current_screen = "main"
                         live.start()
                         live.update(make_layout(state))
                         live.refresh()
-                elif choice in screen_map:
-                    screen = screen_map[choice]
+                elif key == "UP":
+                    if state.current_screen not in nav_order:
+                        state.current_screen = nav_order[0]
+                    else:
+                        idx = nav_order.index(state.current_screen)
+                        state.current_screen = nav_order[(idx - 1) % len(nav_order)]
+                elif key == "DOWN":
+                    if state.current_screen not in nav_order:
+                        state.current_screen = nav_order[0]
+                    else:
+                        idx = nav_order.index(state.current_screen)
+                        state.current_screen = nav_order[(idx + 1) % len(nav_order)]
+                elif key in screen_map:
+                    screen = screen_map[key]
                     
                     if screen == "exit":
                         console.clear()
                         console.print("[bold cyan]👋 再见![/]")
                         return
                     else:
-                        state.current_screen = screen
+                        if NAV_MODE == "keys":
+                            state.current_screen = screen
+                        else:
+                            # 稳定模式：数字直达模块，避免依赖二次回车
+                            _drain_stdin_buffer()
+                            live.stop()
+                            launch_full_module(screen)
+                            state.current_screen = "main"
+                            live.start()
+                            live.update(make_layout(state))
+                            live.refresh()
     
     except KeyboardInterrupt:
         console.clear()
