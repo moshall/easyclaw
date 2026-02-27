@@ -60,3 +60,7 @@ task_plan.md
 auth-choice-options.ts
 fix.py
 mock_openclaw.py
+
+# Local docker debug tests (contain environment-specific setup; do not commit)
+test_docker_debug.py
+test_docker_openrouter.py
