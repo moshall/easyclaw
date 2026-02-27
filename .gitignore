@@ -53,10 +53,9 @@ htmlcov/
 
 # Local reference/source mirrors (do not sync)
 openclaw_src/
-docs/
-findings.md
-progress.md
-task_plan.md
+/findings.md
+/progress.md
+/task_plan.md
 auth-choice-options.ts
 fix.py
 mock_openclaw.py
