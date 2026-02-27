@@ -103,87 +103,121 @@
       <section id="models" class="panel">
         <h2>模型与供应商</h2>
 
-        <article class="card">
-          <h3>模型选择器（可筛选 + 点选）</h3>
-          <div class="row"><label>按服务商筛选</label><select id="modelProviderFilter"></select></div>
-          <div class="row"><label>关键词筛选</label><input id="modelKeywordFilter" type="text" placeholder="输入模型名或 provider" /></div>
-          <p class="hint">下方所有模型选择框与模型池列表会联动筛选。</p>
-        </article>
+        <div class="subtabs">
+          <button class="subtab-btn active" data-subgroup="models" data-subtarget="models-policy">模型优先级</button>
+          <button class="subtab-btn" data-subgroup="models" data-subtarget="models-pool">模型池管理</button>
+          <button class="subtab-btn" data-subgroup="models" data-subtarget="models-provider">服务商 API</button>
+        </div>
 
-        <article class="card">
-          <h3>全局模型优先级</h3>
-          <div class="row"><label>主模型</label><select id="globalPrimarySelect"></select></div>
-          <div class="row"><label>备用链（可多选）</label><select id="globalFallbacksSelect" multiple size="8"></select></div>
-          <button class="btn" id="saveGlobalModelBtn">保存全局模型策略</button>
-        </article>
+        <section id="models-policy" class="subpanel active" data-subgroup="models">
+          <article class="card">
+            <h3>全局模型优先级</h3>
+            <p class="hint">候选模型优先展示已激活模型；未激活时展示已配置服务商下的模型。</p>
+            <div class="row"><label>主模型</label><select id="globalPrimarySelect"></select></div>
+            <details class="fold">
+              <summary>展开备用链候选列表</summary>
+              <div class="row"><label>备用链（可多选）</label><select id="globalFallbacksSelect" multiple size="8"></select></div>
+            </details>
+            <button class="btn" id="saveGlobalModelBtn">保存全局模型策略</button>
+          </article>
 
-        <article class="card">
-          <h3>指定 Agent 模型优先级</h3>
-          <div class="row"><label>Agent</label><select id="agentModelId"></select></div>
-          <div class="row"><label>主模型</label><select id="agentPrimarySelect"></select></div>
-          <div class="row"><label>备用链（可多选）</label><select id="agentFallbacksSelect" multiple size="8"></select></div>
-          <div class="actions">
-            <button class="btn" id="saveAgentModelBtn">保存 Agent 覆盖</button>
-            <button class="btn danger" id="clearAgentModelBtn">清除 Agent 覆盖</button>
-          </div>
-        </article>
+          <article class="card">
+            <h3>指定 Agent 模型优先级</h3>
+            <div class="row"><label>Agent</label><select id="agentModelId"></select></div>
+            <div class="row"><label>主模型</label><select id="agentPrimarySelect"></select></div>
+            <details class="fold">
+              <summary>展开备用链候选列表</summary>
+              <div class="row"><label>备用链（可多选）</label><select id="agentFallbacksSelect" multiple size="8"></select></div>
+            </details>
+            <div class="actions">
+              <button class="btn" id="saveAgentModelBtn">保存 Agent 覆盖</button>
+              <button class="btn danger" id="clearAgentModelBtn">清除 Agent 覆盖</button>
+            </div>
+          </article>
 
-        <article class="card">
-          <h3>临时指派 Agent（Spawn）模型优先级</h3>
-          <div class="row"><label>主模型</label><select id="spawnPrimarySelect"></select></div>
-          <div class="row"><label>备用链（可多选）</label><select id="spawnFallbacksSelect" multiple size="8"></select></div>
-          <div class="actions">
-            <button class="btn" id="saveSpawnModelBtn">保存 Spawn 策略</button>
-            <button class="btn danger" id="clearSpawnModelBtn">清除 Spawn 覆盖</button>
-          </div>
-        </article>
+          <article class="card">
+            <h3>临时指派 Agent（Spawn）模型优先级</h3>
+            <div class="row"><label>主模型</label><select id="spawnPrimarySelect"></select></div>
+            <details class="fold">
+              <summary>展开备用链候选列表</summary>
+              <div class="row"><label>备用链（可多选）</label><select id="spawnFallbacksSelect" multiple size="8"></select></div>
+            </details>
+            <div class="actions">
+              <button class="btn" id="saveSpawnModelBtn">保存 Spawn 策略</button>
+              <button class="btn danger" id="clearSpawnModelBtn">清除 Spawn 覆盖</button>
+            </div>
+          </article>
+        </section>
 
-        <article class="card">
-          <h3>模型池快速操作（激活/移除/设为主模型）</h3>
-          <p class="hint">无需记模型 ID，直接点击操作。</p>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr><th>服务商</th><th>模型</th><th>可用</th><th>状态</th><th>操作</th></tr>
-              </thead>
-              <tbody id="modelPoolRows"></tbody>
-            </table>
-          </div>
-        </article>
+        <section id="models-pool" class="subpanel" data-subgroup="models">
+          <article class="card">
+            <h3>模型选择器（可筛选 + 点选）</h3>
+            <div class="row"><label>按服务商筛选</label><select id="modelProviderFilter"></select></div>
+            <div class="row"><label>关键词筛选</label><input id="modelKeywordFilter" type="text" placeholder="输入模型名或 provider" /></div>
+            <p class="hint">用于筛选下方模型池列表。</p>
+          </article>
 
-        <article class="card">
-          <h3>服务商 API 管理</h3>
-
-          <div class="card-sub">
-            <h4>官方服务商：写入/更新 API Key</h4>
-            <div class="row"><label>服务商</label><select id="officialProviderForApi"></select></div>
-            <div class="row"><label>API Key</label><input id="officialProviderApiKey" type="password" /></div>
-            <div class="row"><label>Base URL（可选）</label><input id="officialProviderBaseUrl" type="text" placeholder="通常可留空" /></div>
-            <button class="btn" id="saveOfficialProviderApiBtn">保存官方服务商 API</button>
-          </div>
-
-          <div class="card-sub">
-            <h4>自定义服务商：新增与自动发现</h4>
-            <div class="row"><label>服务商名称</label><input id="customProviderName" type="text" placeholder="aliyun / volcengine / tencent" /></div>
-            <div class="row"><label>协议</label><select id="customProviderProtocol"></select></div>
-            <div class="row"><label>Base URL</label><input id="customProviderBaseUrl" type="text" placeholder="https://.../v1" /></div>
-            <div class="row"><label>API Key</label><input id="customProviderApiKey" type="password" /></div>
-            <label class="check"><input id="customProviderDiscover" type="checkbox" checked /> 保存后自动发现模型</label>
-            <button class="btn" id="addCustomProviderBtn">新增/更新自定义服务商</button>
-          </div>
-
-          <div class="card-sub">
-            <h4>已配置服务商</h4>
+          <article class="card">
+            <h3>模型池快速操作（激活/移除/设为主模型）</h3>
+            <p class="hint">无需记模型 ID，直接点击操作。</p>
             <div class="table-wrap">
               <table>
                 <thead>
-                  <tr><th>服务商</th><th>账号</th><th>Key</th><th>模型</th><th>操作</th></tr>
+                  <tr><th>服务商</th><th>模型</th><th>可用</th><th>状态</th><th>操作</th></tr>
                 </thead>
-                <tbody id="providerManageRows"></tbody>
+                <tbody id="modelPoolRows"></tbody>
               </table>
             </div>
-          </div>
-        </article>
+          </article>
+        </section>
+
+        <section id="models-provider" class="subpanel" data-subgroup="models">
+          <article class="card">
+            <h3>服务商 API 管理</h3>
+
+            <div class="card-sub">
+              <h4>已配置服务商（优先查看）</h4>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>服务商</th><th>账号</th><th>Key</th><th>模型</th><th>操作</th></tr>
+                  </thead>
+                  <tbody id="providerManageRows"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="card-sub">
+              <h4>官方服务商：按认证方式配置</h4>
+              <div class="row"><label>认证方式</label><select id="officialAuthOption"></select></div>
+              <div class="row"><label>服务商</label><input id="officialAuthProvider" type="text" readonly /></div>
+              <div id="officialApiAuthBox">
+                <div class="row"><label>API Key</label><input id="officialProviderApiKey" type="password" /></div>
+                <button class="btn" id="saveOfficialProviderApiBtn">保存 API Key</button>
+              </div>
+              <div id="officialOauthAuthBox">
+                <p class="hint">OAuth 模式：点击获取授权链接和授权码后，在浏览器授权页填写授权码。</p>
+                <div class="actions">
+                  <button class="btn subtle" id="startOfficialOauthBtn">获取授权链接</button>
+                  <a id="officialOauthLinkAnchor" href="#" target="_blank" rel="noopener noreferrer" class="btn subtle" style="display:none;">打开授权链接</a>
+                </div>
+                <div class="row"><label>授权链接</label><input id="officialOauthLink" type="text" readonly /></div>
+                <div class="row"><label>授权码</label><input id="officialOauthCode" type="text" readonly /></div>
+                <pre id="officialOauthRaw"></pre>
+              </div>
+            </div>
+
+            <div class="card-sub">
+              <h4>自定义服务商：新增与自动发现</h4>
+              <div class="row"><label>服务商名称</label><input id="customProviderName" type="text" placeholder="aliyun / volcengine / tencent" /></div>
+              <div class="row"><label>协议</label><select id="customProviderProtocol"></select></div>
+              <div class="row"><label>Base URL</label><input id="customProviderBaseUrl" type="text" placeholder="https://.../v1" /></div>
+              <div class="row"><label>API Key</label><input id="customProviderApiKey" type="password" /></div>
+              <label class="check"><input id="customProviderDiscover" type="checkbox" checked /> 保存后自动发现模型</label>
+              <button class="btn" id="addCustomProviderBtn">新增/更新自定义服务商</button>
+            </div>
+          </article>
+        </section>
       </section>
 
       <section id="agents" class="panel">
@@ -227,6 +261,13 @@
       <section id="dispatch" class="panel">
         <h2>Agent派发管理</h2>
         <article class="card">
+          <h3>当前派发状态</h3>
+          <p><strong>当前 Agent：</strong><span id="dispatchCurrentAgent">-</span></p>
+          <p><strong>派发开关：</strong><span id="dispatchCurrentEnabled">-</span></p>
+          <p><strong>固定 Agent 白名单：</strong><span id="dispatchCurrentAllow">-</span></p>
+          <p><strong>最大并发：</strong><span id="dispatchCurrentMax">-</span> <span class="hint">(全局默认: <span id="dispatchGlobalMax">-</span>)</span></p>
+        </article>
+        <article class="card">
           <h3>按 Agent 配置派发策略</h3>
           <div class="row"><label>Agent</label><select id="dispatchAgentId"></select></div>
           <label class="check"><input id="dispatchEnabled" type="checkbox" /> 启用派发（固定 + 临时）</label>
@@ -240,39 +281,74 @@
       <section id="services" class="panel">
         <h2>服务配置</h2>
 
-        <article class="card">
-          <h3>官方搜索服务配置</h3>
-          <div class="row"><label>服务商</label><select id="officialSearchProvider"></select></div>
-          <div class="row"><label>API Key</label><input id="officialSearchApiKey" type="password" placeholder="可留空仅切换默认服务" /></div>
-          <label class="check"><input id="officialActivateDefault" type="checkbox" checked /> 保存后激活为默认搜索服务</label>
-          <div class="actions">
-            <button class="btn" id="saveOfficialSearchBtn">保存官方搜索配置</button>
-            <button class="btn danger" id="clearOfficialSearchBtn">清空该官方配置</button>
-          </div>
-        </article>
+        <div class="subtabs">
+          <button class="subtab-btn active" data-subgroup="services" data-subtarget="services-official">官方搜索</button>
+          <button class="subtab-btn" data-subgroup="services" data-subtarget="services-adapter">扩展搜索</button>
+          <button class="subtab-btn" data-subgroup="services" data-subtarget="services-failover">主备切换</button>
+          <button class="subtab-btn" data-subgroup="services" data-subtarget="services-rollback">配置回滚</button>
+        </div>
 
-        <article class="card">
-          <h3>扩展搜索服务配置（智谱/Serper/Tavily）</h3>
-          <div class="row"><label>扩展源</label><select id="adapterProvider"></select></div>
-          <div class="row"><label>API Key</label><input id="adapterApiKey" type="password" /></div>
-          <div class="row"><label>Base URL</label><input id="adapterBaseUrl" type="text" /></div>
-          <div class="row"><label>Model（可选）</label><input id="adapterModel" type="text" /></div>
-          <div class="row"><label>TopK</label><input id="adapterTopK" type="number" min="1" max="20" value="5" /></div>
-          <div class="row"><label>冷却秒数</label><input id="adapterCooldown" type="number" min="5" max="3600" value="60" /></div>
-          <label class="check"><input id="adapterEnabled" type="checkbox" checked /> 启用该扩展源</label>
-          <button class="btn" id="saveAdapterBtn">保存扩展搜索配置</button>
-        </article>
+        <section id="services-official" class="subpanel active" data-subgroup="services">
+          <article class="card">
+            <h3>官方搜索服务配置</h3>
+            <div class="row"><label>服务商</label><select id="officialSearchProvider"></select></div>
+            <div class="row"><label>API Key</label><input id="officialSearchApiKey" type="password" placeholder="可留空仅切换默认服务" /></div>
+            <label class="check"><input id="officialActivateDefault" type="checkbox" checked /> 保存后激活为默认搜索服务</label>
+            <div class="actions">
+              <button class="btn" id="saveOfficialSearchBtn">保存官方搜索配置</button>
+              <button class="btn danger" id="clearOfficialSearchBtn">清空该官方配置</button>
+            </div>
+          </article>
+        </section>
 
-        <article class="card">
-          <h3>搜索主备切换</h3>
-          <div class="row"><label>主搜索源</label><select id="searchPrimarySource"></select></div>
-          <div class="row"><label>候选搜索源（逗号分隔 source_id）</label><input id="searchFallbackSources" type="text" placeholder="official:brave,adapter:tavily" /></div>
-          <div class="actions">
-            <button class="btn" id="saveSearchFailoverBtn">保存主备链</button>
-            <button class="btn subtle" id="testSearchBtn">演练主备切换</button>
-          </div>
-          <pre id="searchTestOutput"></pre>
-        </article>
+        <section id="services-adapter" class="subpanel" data-subgroup="services">
+          <article class="card">
+            <h3>扩展搜索服务配置（智谱/Serper/Tavily）</h3>
+            <div class="row"><label>扩展源</label><select id="adapterProvider"></select></div>
+            <div class="row"><label>API Key</label><input id="adapterApiKey" type="password" /></div>
+            <div class="row"><label>Base URL</label><input id="adapterBaseUrl" type="text" /></div>
+            <div class="row"><label>Model（可选）</label><input id="adapterModel" type="text" /></div>
+            <div class="row"><label>TopK</label><input id="adapterTopK" type="number" min="1" max="20" value="5" /></div>
+            <div class="row"><label>冷却秒数</label><input id="adapterCooldown" type="number" min="5" max="3600" value="60" /></div>
+            <label class="check"><input id="adapterEnabled" type="checkbox" checked /> 启用该扩展源</label>
+            <button class="btn" id="saveAdapterBtn">保存扩展搜索配置</button>
+          </article>
+        </section>
+
+        <section id="services-failover" class="subpanel" data-subgroup="services">
+          <article class="card">
+            <h3>搜索主备切换</h3>
+            <div class="row"><label>主搜索源</label><select id="searchPrimarySource"></select></div>
+            <div class="row"><label>候选搜索源（逗号分隔 source_id）</label><input id="searchFallbackSources" type="text" placeholder="official:brave,adapter:tavily" /></div>
+            <div class="actions">
+              <button class="btn" id="saveSearchFailoverBtn">保存主备链</button>
+              <button class="btn subtle" id="testSearchBtn">演练主备切换</button>
+            </div>
+            <pre id="searchTestOutput"></pre>
+          </article>
+        </section>
+
+        <section id="services-rollback" class="subpanel" data-subgroup="services">
+          <article class="card">
+            <h3>配置回滚（小白保护）</h3>
+            <p><strong>当前配置文件：</strong><span id="rollbackConfigPath" class="mono">-</span></p>
+            <p><strong>备份目录：</strong><span id="rollbackBackupDir" class="mono">-</span></p>
+            <div class="row"><label>可用备份</label><select id="rollbackBackupSelect"></select></div>
+            <div class="actions">
+              <button class="btn subtle" id="rollbackRefreshBtn">刷新备份列表</button>
+              <button class="btn danger" id="rollbackApplyBtn">回滚到选中备份</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>备份文件</th><th>时间戳</th><th>大小</th></tr>
+                </thead>
+                <tbody id="rollbackRows"></tbody>
+              </table>
+            </div>
+            <pre id="rollbackResult"></pre>
+          </article>
+        </section>
       </section>
     </section>
   </main>

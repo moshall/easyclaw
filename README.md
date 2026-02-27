@@ -23,6 +23,7 @@ OpenClaw 的本地管理工具，提供稳定的数字输入 TUI（默认）和�
   - 工具配置（搜索服务、向量化）
   - 搜索服务支持“官方 + 扩展源”统一配置
   - 搜索服务主备切换（Primary/Fallback）
+  - 配置回滚（查看备份并一键恢复）
 - `🔌 自动化与集成`：
   - 网关设置
   - 系统辅助（Onboard/重启/回滚）
@@ -80,6 +81,15 @@ EASYCLAW_TUI_MODE=panel python3 easyclaw.py tui
 
 ```bash
 python3 easyclaw.py web
+```
+
+- 默认端口：`4231`
+- 自定义端口：
+
+```bash
+python3 easyclaw.py web --port 5001
+# 或
+EASYCLAW_WEB_PORT=5001 python3 easyclaw.py web
 ```
 
 ### 在 Docker 容器中运行（示例）

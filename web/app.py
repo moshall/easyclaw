@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import glob
 import time
+import shutil
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -13,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from core import (
     DEFAULT_AUTH_PROFILES_PATH,
+    DEFAULT_BACKUP_DIR,
     DEFAULT_CONFIG_PATH,
     config,
     get_models_providers,
@@ -64,6 +69,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 WEB_TOKEN = os.environ.get("WEB_API_TOKEN", "default-dev-token")
 _CACHE: Dict[str, Dict[str, Any]] = {}
+REAL_OPENCLAW_CONFIG_PATH = "/root/.openclaw/openclaw.json"
 PROVIDER_DEFAULT_BASE_URLS: Dict[str, str] = {
     "openrouter": "https://openrouter.ai/api/v1",
 }
@@ -97,6 +103,118 @@ def _normalize_provider(provider: str) -> str:
     return str(provider or "").strip().strip("'\"").strip().lower()
 
 
+def _list_config_backups(limit: int = 20) -> List[Dict[str, Any]]:
+    safe_limit = max(1, min(200, int(limit)))
+    if not os.path.isdir(DEFAULT_BACKUP_DIR):
+        return []
+
+    seen: Dict[str, bool] = {}
+    paths: List[str] = []
+    patterns = [
+        os.path.join(DEFAULT_BACKUP_DIR, "easyclaw_*.json.bak"),
+        os.path.join(DEFAULT_BACKUP_DIR, "openclaw_bkp_*.json"),
+        os.path.join(DEFAULT_BACKUP_DIR, "*.json.bak"),
+    ]
+    for pattern in patterns:
+        for path in glob.glob(pattern):
+            abs_path = os.path.abspath(path)
+            if abs_path in seen or not os.path.isfile(abs_path):
+                continue
+            seen[abs_path] = True
+            paths.append(abs_path)
+
+    paths.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    out: List[Dict[str, Any]] = []
+    for path in paths[:safe_limit]:
+        try:
+            stat = os.stat(path)
+            out.append(
+                {
+                    "name": os.path.basename(path),
+                    "path": path,
+                    "size": int(stat.st_size),
+                    "mtime": int(stat.st_mtime),
+                }
+            )
+        except Exception:
+            continue
+    return out
+
+
+def _resolve_backup_file_by_name(name: str) -> str:
+    target = os.path.basename(str(name or "").strip())
+    if not target:
+        return ""
+    for item in _list_config_backups(limit=500):
+        if str(item.get("name", "")).strip() == target:
+            return str(item.get("path", "")).strip()
+    return ""
+
+
+def _normalize_dispatch_allow_agents(enabled: bool, allow_agents: List[str]) -> List[str]:
+    if not enabled:
+        return []
+    cleaned: List[str] = []
+    for item in (allow_agents or []):
+        token = str(item or "").strip()
+        if token and token not in cleaned:
+            cleaned.append(token)
+    if not cleaned:
+        # 启用派发但未填白名单时，按“允许所有固定 Agent”处理，避免开关看似无效。
+        return ["*"]
+    return cleaned
+
+
+def _extract_oauth_url_and_code(raw: str) -> tuple[str, str]:
+    text = str(raw or "")
+    url_match = re.search(r"https?://[^\s)]+", text)
+    code_match = re.search(r"(?:code|验证码|授权码)\s*[:：]\s*([A-Z0-9-]{4,})", text, flags=re.IGNORECASE)
+    if not code_match:
+        code_match = re.search(r"\b([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+)\b", text)
+    return (url_match.group(0) if url_match else "", code_match.group(1) if code_match else "")
+
+
+def _read_json_file(path: str) -> Dict[str, Any]:
+    try:
+        if not os.path.exists(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _seed_agents_from_real_config_if_needed() -> List[Dict[str, Any]]:
+    # 在 sandbox 模式下，若隔离配置缺失 agents.list，则尝试从真实配置导入，
+    # 保障 Web 端 Agent/派发页面可回显且可操作。
+    if not is_sandbox_enabled():
+        return []
+    real = _read_json_file(REAL_OPENCLAW_CONFIG_PATH)
+    real_agents = real.get("agents", {}).get("list", [])
+    if not isinstance(real_agents, list) or not real_agents:
+        return []
+
+    agents_root = config.data.setdefault("agents", {})
+    agents_root["list"] = deepcopy(real_agents)
+
+    real_defaults = real.get("agents", {}).get("defaults", {})
+    if isinstance(real_defaults, dict):
+        defaults = agents_root.setdefault("defaults", {})
+        if isinstance(defaults, dict):
+            if not str(defaults.get("workspace", "") or "").strip():
+                ws = str(real_defaults.get("workspace", "") or "").strip()
+                if ws:
+                    defaults["workspace"] = ws
+            if not isinstance(defaults.get("subagents"), dict) and isinstance(real_defaults.get("subagents"), dict):
+                defaults["subagents"] = deepcopy(real_defaults.get("subagents"))
+
+    config.save()
+    config.reload()
+    seeded = config.data.get("agents", {}).get("list", [])
+    return seeded if isinstance(seeded, list) else []
+
+
 def _extract_model_cfg(model_cfg: Any) -> tuple[str, List[str]]:
     if isinstance(model_cfg, str):
         val = model_cfg.strip()
@@ -119,15 +237,17 @@ def _build_model_cfg(primary: str, fallbacks: List[str]) -> Any:
     fb = [str(x).strip() for x in (fallbacks or []) if str(x).strip()]
     if not p and not fb:
         return None
-    if p and not fb:
-        return p
-    return {"primary": p or None, "fallbacks": fb}
+    # OpenClaw 新版本期望 agents.defaults.model 为对象结构，避免写成字符串导致校验报错。
+    return {"primary": p, "fallbacks": fb}
 
 
 def _get_agents() -> List[Dict[str, Any]]:
     config.reload()
     agents = config.data.get("agents", {}).get("list", [])
-    return agents if isinstance(agents, list) else []
+    if isinstance(agents, list) and agents:
+        return agents
+    seeded = _seed_agents_from_real_config_if_needed()
+    return seeded if seeded else (agents if isinstance(agents, list) else [])
 
 
 def _agent_by_id(agent_id: str) -> Dict[str, Any]:
@@ -595,6 +715,15 @@ class DiscoverModelsIn(BaseModel):
     provider: str
 
 
+class ConfigRollbackIn(BaseModel):
+    backupName: str
+
+
+class OfficialOauthStartIn(BaseModel):
+    optionId: str
+    provider: str
+
+
 class ModelToggleIn(BaseModel):
     key: str
     activate: bool = True
@@ -777,7 +906,7 @@ async def set_control_whitelist_api(body: ControlWhitelistIn):
 
 @app.post("/api/dispatch", dependencies=[Depends(verify_token)])
 async def set_dispatch_policy_api(body: DispatchPolicyIn):
-    allow_agents = body.allowAgents if body.enabled else []
+    allow_agents = _normalize_dispatch_allow_agents(body.enabled, body.allowAgents)
     ok = config.update_subagent_for(
         agent_id=body.agentId,
         allow_agents=allow_agents,
@@ -908,11 +1037,110 @@ async def get_provider_options_api():
     return {"options": _get_official_provider_options(force=False)}
 
 
+@app.post("/api/providers/oauth/start", dependencies=[Depends(verify_token)])
+async def start_provider_oauth_api(body: OfficialOauthStartIn):
+    provider = _normalize_provider(body.provider)
+    option_id = str(body.optionId or "").strip()
+    if not provider:
+        raise HTTPException(status_code=400, detail="provider 必填")
+
+    cmd_onboard = [
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--auth-choice",
+        option_id or provider,
+        "--skip-channels",
+        "--skip-skills",
+        "--skip-health",
+        "--skip-ui",
+        "--no-install-daemon",
+        "--json",
+    ]
+    out1, err1, code1 = run_cli(cmd_onboard)
+    raw1 = "\n".join([x for x in [out1, err1] if x]).strip()
+    url1, oauth_code1 = _extract_oauth_url_and_code(raw1)
+
+    if url1 or oauth_code1:
+        return {
+            "ok": True,
+            "exitCode": code1,
+            "provider": provider,
+            "optionId": option_id,
+            "oauthUrl": url1,
+            "oauthCode": oauth_code1,
+            "requiresTty": False,
+            "recommendedCommand": "",
+            "raw": raw1,
+        }
+
+    cmd_login = ["models", "auth", "login", "--provider", provider]
+    if option_id and option_id != provider:
+        cmd_login.extend(["--method", option_id])
+    out2, err2, code2 = run_cli(cmd_login)
+    raw2 = "\n".join([x for x in [out2, err2] if x]).strip()
+    url2, oauth_code2 = _extract_oauth_url_and_code(raw2)
+    raw_all = "\n\n---\n\n".join([x for x in [raw1, raw2] if x]).strip()
+
+    requires_tty = "interactive TTY" in raw_all or "requires a TTY" in raw_all
+    recommended_cmd = ""
+    if requires_tty:
+        recommended_cmd = f"openclaw models auth login --provider {provider}"
+        if option_id and option_id != provider:
+            recommended_cmd += f" --method {option_id}"
+
+    return {
+        "ok": bool(url2 or oauth_code2),
+        "exitCode": code2 if code2 is not None else code1,
+        "provider": provider,
+        "optionId": option_id,
+        "oauthUrl": url2,
+        "oauthCode": oauth_code2,
+        "requiresTty": requires_tty,
+        "recommendedCommand": recommended_cmd,
+        "raw": raw_all,
+    }
+
+
 @app.post("/api/providers/refresh-model-pool", dependencies=[Depends(verify_token)])
 async def refresh_model_pool_api():
     ok, message = refresh_official_model_pool()
     _invalidate_cache()
     return {"ok": ok, "message": message, "state": _state_payload(force=True)}
+
+
+@app.get("/api/config/backups", dependencies=[Depends(verify_token)])
+async def list_config_backups_api(limit: int = 20):
+    return {
+        "items": _list_config_backups(limit=limit),
+        "configPath": DEFAULT_CONFIG_PATH,
+        "backupDir": DEFAULT_BACKUP_DIR,
+    }
+
+
+@app.post("/api/config/rollback", dependencies=[Depends(verify_token)])
+async def rollback_config_api(body: ConfigRollbackIn):
+    backup_path = _resolve_backup_file_by_name(body.backupName)
+    if not backup_path:
+        raise HTTPException(status_code=404, detail="未找到指定备份文件")
+    if not os.path.exists(DEFAULT_CONFIG_PATH):
+        raise HTTPException(status_code=500, detail=f"配置文件不存在: {DEFAULT_CONFIG_PATH}")
+
+    pre_backup = config.backup() or ""
+    try:
+        shutil.copy2(backup_path, DEFAULT_CONFIG_PATH)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"回滚失败: {e}")
+
+    config.reload()
+    _invalidate_cache()
+    return {
+        "ok": True,
+        "restored": os.path.basename(backup_path),
+        "restoredPath": backup_path,
+        "preBackupPath": pre_backup,
+        "state": _state_payload(force=True),
+    }
 
 
 @app.post("/api/search/official", dependencies=[Depends(verify_token)])

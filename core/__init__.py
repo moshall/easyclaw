@@ -4,6 +4,7 @@ Core 模块 - OpenClaw 配置和 API 封装
 import json
 import os
 import subprocess
+from copy import deepcopy
 from datetime import datetime
 from typing import Any, Optional, Dict, List
 
@@ -27,6 +28,243 @@ INVALID_TOKEN_PATTERNS = [
 ]
 
 
+def _agent_security_store_path() -> str:
+    base_dir = os.path.dirname(DEFAULT_CONFIG_PATH) or "."
+    default_path = os.path.join(base_dir, "easyclaw", "agent_security.json")
+    return os.environ.get("OPENCLAW_AGENT_SECURITY_PATH", default_path)
+
+
+def _normalize_security_record(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    workspace_scope = "workspace-only" if str(value.get("workspaceScope", "")).strip() == "workspace-only" else "full"
+    raw_caps = value.get("controlPlaneCapabilities", [])
+    caps: List[str] = []
+    if isinstance(raw_caps, list):
+        for item in raw_caps:
+            token = str(item or "").strip()
+            if token and token not in caps:
+                caps.append(token)
+    return {"workspaceScope": workspace_scope, "controlPlaneCapabilities": caps}
+
+
+def _load_agent_security_store() -> Dict[str, Any]:
+    path = _agent_security_store_path()
+    try:
+        if not os.path.exists(path):
+            return {"agents": {}}
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"agents": {}}
+        agents = data.get("agents", {})
+        if not isinstance(agents, dict):
+            data["agents"] = {}
+        return data
+    except Exception:
+        return {"agents": {}}
+
+
+def _save_agent_security_store(data: Dict[str, Any]) -> bool:
+    try:
+        path = _agent_security_store_path()
+        parent = os.path.dirname(path)
+        if parent and not os.path.exists(parent):
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data if isinstance(data, dict) else {"agents": {}}, f, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def _extract_agent_security_map(data: Dict[str, Any]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
+    ids: List[str] = []
+    sec_map: Dict[str, Dict[str, Any]] = {}
+    agents = data.get("agents", {}) if isinstance(data, dict) else {}
+    agents_list = agents.get("list", []) if isinstance(agents, dict) else []
+    if not isinstance(agents_list, list):
+        return ids, sec_map
+    for row in agents_list:
+        if not isinstance(row, dict):
+            continue
+        aid = str(row.get("id", "") or "").strip()
+        if not aid:
+            continue
+        ids.append(aid)
+        normalized = _normalize_security_record(row.get("security"))
+        if normalized:
+            sec_map[aid] = normalized
+    return ids, sec_map
+
+
+def _sync_agent_security_store_from_data(data: Dict[str, Any]) -> bool:
+    agents = data.get("agents", {}) if isinstance(data, dict) else {}
+    agents_list = agents.get("list", None) if isinstance(agents, dict) else None
+    if not isinstance(agents_list, list):
+        return True
+    ids, sec_map = _extract_agent_security_map(data if isinstance(data, dict) else {})
+    store = _load_agent_security_store()
+    agents_store = store.get("agents", {})
+    if not isinstance(agents_store, dict):
+        agents_store = {}
+    for aid in list(agents_store.keys()):
+        if aid not in ids:
+            agents_store.pop(aid, None)
+    for aid in ids:
+        if aid in sec_map:
+            agents_store[aid] = sec_map[aid]
+        else:
+            agents_store.pop(aid, None)
+    store["agents"] = agents_store
+    return _save_agent_security_store(store)
+
+
+def _inject_agent_security_into_data(data: Dict[str, Any]) -> None:
+    if not isinstance(data, dict):
+        return
+    agents = data.get("agents", {})
+    if not isinstance(agents, dict):
+        return
+    agents_list = agents.get("list", [])
+    if not isinstance(agents_list, list):
+        return
+    store = _load_agent_security_store()
+    agents_store = store.get("agents", {}) if isinstance(store.get("agents", {}), dict) else {}
+    for row in agents_list:
+        if not isinstance(row, dict):
+            continue
+        aid = str(row.get("id", "") or "").strip()
+        if not aid:
+            continue
+        normalized = _normalize_security_record(agents_store.get(aid))
+        if normalized:
+            row["security"] = normalized
+        else:
+            row.pop("security", None)
+
+
+def _normalize_model_config(value: Any) -> Optional[Dict[str, Any]]:
+    """将 model 配置标准化为对象格式（OpenClaw 新版本兼容）。"""
+    if isinstance(value, str):
+        primary = value.strip()
+        if not primary:
+            return None
+        return {"primary": primary, "fallbacks": []}
+    if isinstance(value, dict):
+        primary = str(value.get("primary", "") or "").strip()
+        raw_fallbacks = value.get("fallbacks", [])
+        fallbacks: List[str] = []
+        if isinstance(raw_fallbacks, list):
+            for item in raw_fallbacks:
+                v = str(item or "").strip()
+                if v:
+                    fallbacks.append(v)
+        if not primary and not fallbacks:
+            return None
+        return {"primary": primary, "fallbacks": fallbacks}
+    return None
+
+
+def _sanitize_openclaw_payload(data: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
+    """
+    修复已知 schema 不兼容项：
+    - agents.list[*].security（官方 schema 不识别）
+    - 各层 model 的字符串格式 -> 对象格式
+    """
+    payload: Dict[str, Any] = deepcopy(data if isinstance(data, dict) else {})
+    changed = False
+
+    agents = payload.get("agents")
+    if not isinstance(agents, dict):
+        return payload, changed
+
+    defaults = agents.get("defaults")
+    if isinstance(defaults, dict):
+        if "model" in defaults:
+            before = defaults.get("model")
+            normalized = _normalize_model_config(before)
+            if normalized is None:
+                if "model" in defaults:
+                    defaults.pop("model", None)
+                    changed = True
+            elif before != normalized:
+                defaults["model"] = normalized
+                changed = True
+
+        sub_defaults = defaults.get("subagents")
+        if isinstance(sub_defaults, dict) and "model" in sub_defaults:
+            before = sub_defaults.get("model")
+            normalized = _normalize_model_config(before)
+            if normalized is None:
+                sub_defaults.pop("model", None)
+                changed = True
+            elif before != normalized:
+                sub_defaults["model"] = normalized
+                changed = True
+
+    agents_list = agents.get("list")
+    if isinstance(agents_list, list):
+        for row in agents_list:
+            if not isinstance(row, dict):
+                continue
+            if "security" in row:
+                row.pop("security", None)
+                changed = True
+
+            if "model" in row:
+                before = row.get("model")
+                normalized = _normalize_model_config(before)
+                if normalized is None:
+                    row.pop("model", None)
+                    changed = True
+                elif before != normalized:
+                    row["model"] = normalized
+                    changed = True
+
+            sub = row.get("subagents")
+            if isinstance(sub, dict) and "model" in sub:
+                before = sub.get("model")
+                normalized = _normalize_model_config(before)
+                if normalized is None:
+                    sub.pop("model", None)
+                    changed = True
+                elif before != normalized:
+                    sub["model"] = normalized
+                    changed = True
+
+    return payload, changed
+
+
+def _repair_openclaw_config_if_needed() -> bool:
+    """在执行官方 CLI 前自动修复本地配置中的已知不兼容字段。"""
+    try:
+        if not os.path.exists(DEFAULT_CONFIG_PATH):
+            return False
+        with open(DEFAULT_CONFIG_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            return False
+        _sync_agent_security_store_from_data(raw)
+        fixed, changed = _sanitize_openclaw_payload(raw)
+        if not changed:
+            return False
+
+        try:
+            os.makedirs(DEFAULT_BACKUP_DIR, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = f"{DEFAULT_BACKUP_DIR}/easyclaw_autofix_{ts}.json.bak"
+            subprocess.run(["cp", DEFAULT_CONFIG_PATH, backup_path], check=False)
+        except Exception:
+            pass
+
+        with open(DEFAULT_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(fixed, f, indent=2)
+        return True
+    except Exception:
+        return False
+
+
 class OpenClawConfig:
     """OpenClaw 配置管理"""
     
@@ -42,8 +280,10 @@ class OpenClawConfig:
         """加载配置"""
         try:
             if os.path.exists(self.path):
-                with open(self.path, 'r') as f:
+                with open(self.path, 'r', encoding="utf-8") as f:
                     self.data = json.load(f)
+                if isinstance(self.data, dict):
+                    _inject_agent_security_into_data(self.data)
         except Exception as e:
             print(f"加载配置失败: {e}")
             self.data = {}
@@ -58,19 +298,22 @@ class OpenClawConfig:
             if self._is_dry_run():
                 return True
 
+            _sync_agent_security_store_from_data(self.data if isinstance(self.data, dict) else {})
+            payload, _ = _sanitize_openclaw_payload(self.data if isinstance(self.data, dict) else {})
+
             # 内容无变化则跳过备份/写入
             if os.path.exists(self.path):
                 try:
-                    with open(self.path, 'r') as f:
+                    with open(self.path, 'r', encoding="utf-8") as f:
                         current = json.load(f)
-                    if current == self.data:
+                    if current == payload:
                         return True
                 except Exception:
                     pass
 
             self.backup()
-            with open(self.path, 'w') as f:
-                json.dump(self.data, f, indent=2)
+            with open(self.path, 'w', encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
             return True
         except Exception as e:
             print(f"保存配置失败: {e}")
@@ -212,6 +455,8 @@ def run_cli(args: list, capture: bool = True) -> tuple:
     cmd = [OPENCLAW_BIN] + args
     
     try:
+        _repair_openclaw_config_if_needed()
+
         if capture:
             result = subprocess.run(
                 cmd,

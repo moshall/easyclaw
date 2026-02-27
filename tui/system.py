@@ -14,7 +14,7 @@ from rich.text import Text
 from rich.prompt import Prompt, Confirm
 from rich import box
 
-from core import run_cli, DEFAULT_CONFIG_PATH, DEFAULT_BACKUP_DIR, OPENCLAW_BIN
+from core import run_cli, DEFAULT_CONFIG_PATH, DEFAULT_BACKUP_DIR, OPENCLAW_BIN, config
 
 console = Console()
 
@@ -193,12 +193,7 @@ def rollback_config():
         box=box.DOUBLE
     ))
     
-    if not os.path.exists(DEFAULT_BACKUP_DIR):
-        console.print("\n[bold red]❌ 没有发现备份[/]")
-        pause_enter()
-        return
-    
-    backups = sorted(glob.glob(f"{DEFAULT_BACKUP_DIR}/*.json.bak"), reverse=True)[:10]
+    backups = _list_config_backups(limit=10)
     
     if not backups:
         console.print("\n[bold red]❌ 没有发现备份[/]")
@@ -232,10 +227,35 @@ def rollback_config():
         if 0 <= idx < len(backups):
             backup_file = backups[idx]
             if Confirm.ask(f"[bold red]恢复 {os.path.basename(backup_file)}?[/]", default=False):
+                pre_backup = config.backup()
+                if pre_backup:
+                    console.print(f"[dim]💡 已先备份当前配置: {pre_backup}[/]")
                 import shutil
                 shutil.copy(backup_file, DEFAULT_CONFIG_PATH)
                 console.print("\n[green]✅ 已恢复，需要重启服务[/]")
                 pause_enter()
+
+
+def _list_config_backups(limit: int = 10) -> List[str]:
+    if not os.path.isdir(DEFAULT_BACKUP_DIR):
+        return []
+    safe_limit = max(1, min(100, int(limit)))
+    patterns = [
+        os.path.join(DEFAULT_BACKUP_DIR, "easyclaw_*.json.bak"),
+        os.path.join(DEFAULT_BACKUP_DIR, "openclaw_bkp_*.json"),
+        os.path.join(DEFAULT_BACKUP_DIR, "*.json.bak"),
+    ]
+    seen = set()
+    files: List[str] = []
+    for pattern in patterns:
+        for path in glob.glob(pattern):
+            ap = os.path.abspath(path)
+            if ap in seen or not os.path.isfile(ap):
+                continue
+            seen.add(ap)
+            files.append(ap)
+    files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return files[:safe_limit]
 
 
 def run_onboard():

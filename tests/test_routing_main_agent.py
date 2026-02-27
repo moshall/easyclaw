@@ -121,7 +121,7 @@ class TestRoutingMainAgent(unittest.TestCase):
             row = cfg.data["agents"]["list"][0]
             self.assertEqual(row.get("customMeta"), {"x": 1})
             self.assertEqual(row.get("notes"), "keep-me")
-            self.assertEqual(row.get("model"), "openrouter/openrouter/free")
+            self.assertEqual(row.get("model"), {"primary": "openrouter/openrouter/free", "fallbacks": []})
             self.assertNotIn("security", row)
 
     def test_validate_workspace_path_relaxed_workspace_prefix(self):

@@ -249,9 +249,8 @@ def _build_model_config(primary: str, fallbacks_csv: str):
     fallbacks = [x.strip() for x in (fallbacks_csv or "").split(",") if x.strip()]
     if not primary and not fallbacks:
         return None
-    if primary and not fallbacks:
-        return primary
-    return {"primary": primary or None, "fallbacks": fallbacks}
+    # OpenClaw 新版本要求 model 使用对象结构。
+    return {"primary": primary, "fallbacks": fallbacks}
 
 
 def _ensure_workspace_scaffold(workspace_path: str, agent_id: str):
