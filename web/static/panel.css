@@ -1,0 +1,307 @@
+:root {
+  --bg: #f2f5f1;
+  --surface: #ffffff;
+  --surface-2: #ecf2ee;
+  --text: #1f2a22;
+  --muted: #5c6a61;
+  --brand: #0f766e;
+  --brand-2: #b45309;
+  --danger: #b91c1c;
+  --ok: #047857;
+  --border: #d8e3dc;
+  --shadow: 0 10px 30px rgba(23, 44, 32, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top right, #fdf7ed 0%, #f2f5f1 40%, #edf2ef 100%);
+  color: var(--text);
+  font-family: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", sans-serif;
+}
+
+.bg-orb {
+  position: fixed;
+  width: 280px;
+  height: 280px;
+  border-radius: 50%;
+  filter: blur(28px);
+  opacity: 0.2;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.orb-a {
+  background: #14b8a6;
+  left: -80px;
+  top: -100px;
+}
+
+.orb-b {
+  background: #f59e0b;
+  right: -90px;
+  bottom: -90px;
+}
+
+.topbar,
+.layout {
+  position: relative;
+  z-index: 1;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 20px;
+  padding: 18px 24px 12px;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 24px;
+  letter-spacing: 0.2px;
+}
+
+.topbar p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.token-box {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  min-width: 320px;
+}
+
+.token-box label {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+  padding: 0 24px 24px;
+}
+
+.nav {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px;
+  box-shadow: var(--shadow);
+  height: fit-content;
+}
+
+.nav-btn {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+
+.nav-btn.active,
+.nav-btn:hover {
+  background: var(--surface-2);
+  color: #0f5132;
+}
+
+.content {
+  display: grid;
+  gap: 14px;
+}
+
+.notice {
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  display: none;
+}
+
+.notice.ok {
+  display: block;
+  background: #ecfdf3;
+  border: 1px solid #a7f3d0;
+  color: var(--ok);
+}
+
+.notice.err {
+  display: block;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: var(--danger);
+}
+
+.panel {
+  display: none;
+  gap: 14px;
+}
+
+.panel.active {
+  display: grid;
+}
+
+.panel h2 {
+  margin: 2px 0;
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+}
+
+.cards.two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: var(--shadow);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.row {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+input,
+select,
+button,
+textarea {
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 10px;
+  padding: 9px 10px;
+  color: var(--text);
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.check input {
+  width: auto;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.btn {
+  border: 0;
+  border-radius: 10px;
+  background: var(--brand);
+  color: #fff;
+  padding: 9px 14px;
+  cursor: pointer;
+}
+
+.btn:hover {
+  filter: brightness(1.06);
+}
+
+.btn.subtle {
+  background: #dbece7;
+  color: #1e3a34;
+}
+
+.btn.danger {
+  background: var(--danger);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 520px;
+}
+
+th,
+td {
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  padding: 8px;
+  font-size: 14px;
+}
+
+th {
+  color: var(--muted);
+}
+
+pre {
+  max-height: 220px;
+  overflow: auto;
+  background: #f6faf8;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 12px;
+}
+
+@media (max-width: 980px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .cards.two {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .token-box {
+    min-width: 0;
+  }
+}

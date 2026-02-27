@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>EasyClaw Web 面板</title>
+  <link rel="stylesheet" href="/static/panel.css" />
+</head>
+<body>
+  <div class="bg-orb orb-a"></div>
+  <div class="bg-orb orb-b"></div>
+  <header class="topbar">
+    <div>
+      <h1>EasyClaw Web 面板</h1>
+      <p>TUI 能力的 Web 配置版（轻面板）</p>
+    </div>
+    <div class="token-box">
+      <label for="tokenInput">API Token</label>
+      <input id="tokenInput" type="password" placeholder="X-Claw-Token" />
+      <button id="saveTokenBtn" class="btn">保存</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="nav">
+      <button class="nav-btn active" data-target="dashboard">📊 资产大盘</button>
+      <button class="nav-btn" data-target="models">🧩 模型与供应商</button>
+      <button class="nav-btn" data-target="agents">🧭 Agent 与工作区</button>
+      <button class="nav-btn" data-target="dispatch">👥 Agent派发管理</button>
+      <button class="nav-btn" data-target="services">🛠️ 服务配置</button>
+    </aside>
+
+    <section class="content">
+      <div id="notice" class="notice"></div>
+
+      <section id="dashboard" class="panel active">
+        <h2>资产大盘</h2>
+        <div class="cards two">
+          <article class="card">
+            <h3>全局模型</h3>
+            <p><strong>主模型：</strong><span id="dashPrimary">-</span></p>
+            <p><strong>备用链：</strong><span id="dashFallbacks">-</span></p>
+          </article>
+          <article class="card">
+            <h3>搜索服务</h3>
+            <p><strong>默认服务：</strong><span id="dashSearchProvider">-</span></p>
+            <p><strong>主备源：</strong><span id="dashSearchChain">-</span></p>
+          </article>
+        </div>
+
+        <article class="card">
+          <div class="card-head">
+            <h3>供应商资源概览</h3>
+            <button class="btn subtle" id="refreshModelPoolBtn">刷新官方模型池</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>服务商</th><th>认证</th><th>配置Key</th><th>模型</th></tr>
+              </thead>
+              <tbody id="inventoryRows"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section id="models" class="panel">
+        <h2>模型与供应商</h2>
+
+        <article class="card">
+          <h3>全局模型优先级</h3>
+          <div class="row">
+            <label>主模型</label>
+            <input id="globalPrimary" type="text" placeholder="如 openrouter/auto" />
+          </div>
+          <div class="row">
+            <label>备用链（逗号分隔）</label>
+            <input id="globalFallbacks" type="text" placeholder="modelA,modelB" />
+          </div>
+          <button class="btn" id="saveGlobalModelBtn">保存全局模型策略</button>
+        </article>
+
+        <article class="card">
+          <h3>指定 Agent 模型优先级</h3>
+          <div class="row">
+            <label>Agent</label>
+            <select id="agentModelId"></select>
+          </div>
+          <div class="row">
+            <label>主模型</label>
+            <input id="agentModelPrimary" type="text" />
+          </div>
+          <div class="row">
+            <label>备用链（逗号分隔）</label>
+            <input id="agentModelFallbacks" type="text" />
+          </div>
+          <div class="actions">
+            <button class="btn" id="saveAgentModelBtn">保存 Agent 覆盖</button>
+            <button class="btn danger" id="clearAgentModelBtn">清除 Agent 覆盖</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <h3>临时指派 Agent（Spawn）模型优先级</h3>
+          <div class="row">
+            <label>主模型</label>
+            <input id="spawnPrimary" type="text" />
+          </div>
+          <div class="row">
+            <label>备用链（逗号分隔）</label>
+            <input id="spawnFallbacks" type="text" />
+          </div>
+          <div class="actions">
+            <button class="btn" id="saveSpawnModelBtn">保存 Spawn 策略</button>
+            <button class="btn danger" id="clearSpawnModelBtn">清除 Spawn 覆盖</button>
+          </div>
+        </article>
+      </section>
+
+      <section id="agents" class="panel">
+        <h2>Agent 与工作区</h2>
+
+        <article class="card">
+          <h3>当前 Agent</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Agent</th><th>工作区</th><th>访问范围</th><th>模型策略</th></tr>
+              </thead>
+              <tbody id="agentRows"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="card">
+          <h3>新增 Agent</h3>
+          <div class="row"><label>Agent ID</label><input id="newAgentId" type="text" placeholder="main1" /></div>
+          <div class="row"><label>Workspace 绝对路径</label><input id="newAgentWorkspace" type="text" placeholder="/root/.openclaw/workspace_01" /></div>
+          <label class="check"><input id="newAgentWorkspaceOnly" type="checkbox" /> 仅工作区访问（受限模式）</label>
+          <button class="btn" id="createAgentBtn">创建 Agent</button>
+        </article>
+
+        <article class="card">
+          <h3>工作区绑定/访问限制/白名单</h3>
+          <div class="row"><label>Agent</label><select id="agentOpsId"></select></div>
+          <div class="row"><label>重新绑定 workspace</label><input id="bindWorkspaceInput" type="text" placeholder="/root/.openclaw/workspace" /></div>
+          <button class="btn subtle" id="bindWorkspaceBtn">绑定工作区</button>
+          <label class="check"><input id="workspaceOnlySwitch" type="checkbox" /> 启用“仅工作区访问”</label>
+          <button class="btn subtle" id="setWorkspaceOnlyBtn">保存访问限制</button>
+          <div class="row"><label>控制层命令白名单（逗号分隔）</label><input id="controlCapsInput" type="text" placeholder="model.switch,status.read,skill.read" /></div>
+          <div class="actions">
+            <button class="btn subtle" id="setWhitelistBtn">保存白名单</button>
+            <button class="btn danger" id="clearWhitelistBtn">清空白名单</button>
+          </div>
+        </article>
+      </section>
+
+      <section id="dispatch" class="panel">
+        <h2>Agent派发管理</h2>
+        <article class="card">
+          <h3>按 Agent 配置派发策略</h3>
+          <div class="row"><label>Agent</label><select id="dispatchAgentId"></select></div>
+          <label class="check"><input id="dispatchEnabled" type="checkbox" /> 启用派发（固定 + 临时）</label>
+          <div class="row"><label>固定 Agent 白名单（逗号分隔，* 表示全部）</label><input id="dispatchAllowAgents" type="text" placeholder="*,main1,worker_01" /></div>
+          <div class="row"><label>最大并发（留空继承）</label><input id="dispatchMaxConcurrent" type="number" min="1" max="20" /></div>
+          <label class="check"><input id="dispatchInheritMax" type="checkbox" /> 恢复全局默认并发</label>
+          <button class="btn" id="saveDispatchBtn">保存派发策略</button>
+        </article>
+      </section>
+
+      <section id="services" class="panel">
+        <h2>服务配置</h2>
+
+        <article class="card">
+          <h3>官方搜索服务配置</h3>
+          <div class="row"><label>服务商</label><select id="officialSearchProvider"></select></div>
+          <div class="row"><label>API Key</label><input id="officialSearchApiKey" type="password" placeholder="可留空仅切换默认服务" /></div>
+          <label class="check"><input id="officialActivateDefault" type="checkbox" checked /> 保存后激活为默认搜索服务</label>
+          <div class="actions">
+            <button class="btn" id="saveOfficialSearchBtn">保存官方搜索配置</button>
+            <button class="btn danger" id="clearOfficialSearchBtn">清空该官方配置</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <h3>扩展搜索服务配置（智谱/Serper/Tavily）</h3>
+          <div class="row"><label>扩展源</label><select id="adapterProvider"></select></div>
+          <div class="row"><label>API Key</label><input id="adapterApiKey" type="password" /></div>
+          <div class="row"><label>Base URL</label><input id="adapterBaseUrl" type="text" /></div>
+          <div class="row"><label>Model（可选）</label><input id="adapterModel" type="text" /></div>
+          <div class="row"><label>TopK</label><input id="adapterTopK" type="number" min="1" max="20" value="5" /></div>
+          <div class="row"><label>冷却秒数</label><input id="adapterCooldown" type="number" min="5" max="3600" value="60" /></div>
+          <label class="check"><input id="adapterEnabled" type="checkbox" checked /> 启用该扩展源</label>
+          <button class="btn" id="saveAdapterBtn">保存扩展搜索配置</button>
+        </article>
+
+        <article class="card">
+          <h3>搜索主备切换</h3>
+          <div class="row"><label>主搜索源</label><select id="searchPrimarySource"></select></div>
+          <div class="row"><label>候选搜索源（逗号分隔 source_id）</label><input id="searchFallbackSources" type="text" placeholder="official:brave,adapter:tavily" /></div>
+          <div class="actions">
+            <button class="btn" id="saveSearchFailoverBtn">保存主备链</button>
+            <button class="btn subtle" id="testSearchBtn">演练主备切换</button>
+          </div>
+          <pre id="searchTestOutput"></pre>
+        </article>
+      </section>
+    </section>
+  </main>
+
+  <script src="/static/panel.js"></script>
+</body>
+</html>
