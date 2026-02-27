@@ -59,6 +59,27 @@ OpenClaw 的本地管理工具，提供稳定的数字输入 TUI（默认）和�
 
 ## 快速开始
 
+### 一键安装（推荐）
+
+```bash
+sudo bash install.sh
+```
+
+安装脚本会自动：
+
+- 识别运行环境（Docker/主机）
+- 安装依赖并创建虚拟环境
+- 将当前项目安装到 `/root/.openclaw/easyclaw`
+- 自动探测 `openclaw.json`（必要时创建最小骨架）
+- 注册命令：`easyclaw`、`easytui`
+
+安装后直接使用：
+
+```bash
+easyclaw tui
+easyclaw web
+```
+
 ### 环境要求
 
 - Python 3.10+
@@ -113,11 +134,11 @@ easyclaw/
 ├── easyclaw.py          # 统一入口（tui/web）
 ├── cli.py               # 稳定模式主界面
 ├── app.py               # 面板模式主界面
+├── install.sh           # 一键安装脚本（部署到 /root/.openclaw/easyclaw）
 ├── core/                # 配置读写、执行器、搜索适配、同步等核心逻辑
 ├── tui/                 # 各模块菜单与交互实现
 ├── cmd/                 # 命令工具
 ├── web/                 # Web 服务端
-├── webui/               # Web UI 相关资源
 └── tests/               # 回归测试
 ```
 
