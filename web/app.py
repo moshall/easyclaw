@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -9,8 +11,16 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from core import config, run_cli_json
-from core.executor import safe_exec_json
+from core import (
+    DEFAULT_AUTH_PROFILES_PATH,
+    DEFAULT_CONFIG_PATH,
+    config,
+    get_models_providers,
+    run_cli,
+    run_cli_json,
+    set_models_providers,
+)
+from core.datasource import get_custom_models
 from core.search_adapters import (
     ADAPTER_SPECS,
     OFFICIAL_SEARCH_SOURCES,
@@ -20,12 +30,17 @@ from core.search_adapters import (
     set_primary_source,
     update_provider as update_search_adapter_provider,
 )
-from tui.inventory import get_official_provider_options, refresh_official_model_pool
+from core.sandbox import is_sandbox_enabled
+from core.write_engine import activate_model, deactivate_model, upsert_provider_api_key
+from tui.inventory import (
+    API_PROTOCOLS,
+    configure_custom_provider_config,
+    get_official_provider_options,
+    refresh_official_model_pool,
+)
 from tui.routing import (
     RECOMMENDED_CONTROL_PLANE_CAPABILITIES,
     clear_agent_model_policy,
-    get_default_model,
-    get_fallbacks,
     get_spawn_model_policy,
     list_agent_model_override_details,
     set_agent_control_plane_whitelist,
@@ -48,12 +63,38 @@ BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 WEB_TOKEN = os.environ.get("WEB_API_TOKEN", "default-dev-token")
+_CACHE: Dict[str, Dict[str, Any]] = {}
+PROVIDER_DEFAULT_BASE_URLS: Dict[str, str] = {
+    "openrouter": "https://openrouter.ai/api/v1",
+}
+API_PROTOCOL_FALLBACKS: Dict[str, str] = {
+    "openai-chat": "openai-completions",
+    "anthropic-messages": "anthropic-completions",
+}
 
 
 def verify_token(x_claw_token: str = Header(...)) -> str:
     if x_claw_token != WEB_TOKEN:
         raise HTTPException(status_code=403, detail="Invalid Security Token")
     return x_claw_token
+
+
+def _cached(key: str, ttl_seconds: float, loader, force: bool = False):
+    now = time.time()
+    item = _CACHE.get(key)
+    if not force and item and (now - float(item.get("ts", 0.0))) < ttl_seconds:
+        return item.get("value")
+    value = loader()
+    _CACHE[key] = {"ts": now, "value": value}
+    return value
+
+
+def _invalidate_cache():
+    _CACHE.clear()
+
+
+def _normalize_provider(provider: str) -> str:
+    return str(provider or "").strip().strip("'\"").strip().lower()
 
 
 def _extract_model_cfg(model_cfg: Any) -> tuple[str, List[str]]:
@@ -192,10 +233,10 @@ def _set_official_key_in_config(provider: str, api_key: str) -> bool:
     keys = path.split(".")
     config.reload()
     cur = config.data
-    for k in keys[:-1]:
-        if not isinstance(cur.get(k), dict):
-            cur[k] = {}
-        cur = cur[k]
+    for key in keys[:-1]:
+        if not isinstance(cur.get(key), dict):
+            cur[key] = {}
+        cur = cur[key]
     cur[keys[-1]] = api_key
     ok = config.save()
     if ok:
@@ -211,10 +252,10 @@ def _clear_official_key_in_config(provider: str) -> bool:
     keys = path.split(".")
     config.reload()
     cur = config.data
-    for k in keys[:-1]:
-        if not isinstance(cur, dict) or k not in cur:
+    for key in keys[:-1]:
+        if not isinstance(cur, dict) or key not in cur:
             return True
-        cur = cur[k]
+        cur = cur[key]
     if isinstance(cur, dict):
         cur.pop(keys[-1], None)
     ok = config.save()
@@ -223,10 +264,10 @@ def _clear_official_key_in_config(provider: str) -> bool:
     return ok
 
 
-def _provider_inventory_rows() -> List[Dict[str, Any]]:
+def _provider_inventory_rows_uncached() -> List[Dict[str, Any]]:
     profiles_by_provider = config.get_profiles_by_provider()
     models_by_provider = config.get_models_by_provider()
-    providers_cfg = config.data.get("models", {}).get("providers", {})
+    providers_cfg = get_models_providers() or {}
 
     all_providers = set(profiles_by_provider.keys()) | set(models_by_provider.keys()) | set(providers_cfg.keys())
     rows: List[Dict[str, Any]] = []
@@ -241,16 +282,166 @@ def _provider_inventory_rows() -> List[Dict[str, Any]]:
                 "authCount": len(profiles),
                 "keyCount": key_count,
                 "modelCount": len(models),
+                "api": str(p_cfg.get("api", "") or ""),
+                "baseUrl": str(p_cfg.get("baseUrl", "") or ""),
             }
         )
     return rows
 
 
-def _state_payload() -> Dict[str, Any]:
+def _provider_inventory_rows(force: bool = False) -> List[Dict[str, Any]]:
+    return _cached("inventory_rows", 5.0, _provider_inventory_rows_uncached, force=force) or []
+
+
+def _get_official_provider_options(force: bool = False) -> List[Dict[str, Any]]:
+    return _cached("official_provider_options", 60.0, get_official_provider_options, force=force) or []
+
+
+def _load_all_models_uncached() -> List[Dict[str, Any]]:
+    data = run_cli_json(["models", "list", "--all"])
+    models = data.get("models", []) if isinstance(data, dict) else []
+    if not isinstance(models, list):
+        return []
+
+    out: List[Dict[str, Any]] = []
+    for row in models:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("key", "") or "").strip()
+        if not key:
+            continue
+        provider = key.split("/", 1)[0] if "/" in key else "other"
+        out.append(
+            {
+                "key": key,
+                "name": str(row.get("name", "") or key),
+                "provider": provider,
+                "available": bool(row.get("available", False)),
+            }
+        )
+    return out
+
+
+def _load_all_models(force: bool = False) -> List[Dict[str, Any]]:
+    return _cached("all_models", 20.0, _load_all_models_uncached, force=force) or []
+
+
+def _load_status_uncached() -> Dict[str, Any]:
+    status = run_cli_json(["models", "status"])
+    return status if isinstance(status, dict) else {}
+
+
+def _load_status(force: bool = False) -> Dict[str, Any]:
+    return _cached("status", 4.0, _load_status_uncached, force=force) or {}
+
+
+def _load_usage_uncached() -> Dict[str, Any]:
+    stdout, stderr, code = run_cli(["status", "--usage"])
+    return {
+        "code": code,
+        "raw": stdout or "",
+        "error": stderr or "",
+    }
+
+
+def _load_usage(force: bool = False) -> Dict[str, Any]:
+    return _cached("usage", 20.0, _load_usage_uncached, force=force) or {"code": 0, "raw": "", "error": ""}
+
+
+def _build_active_model_rows(status: Dict[str, Any], all_models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    available_map = {m["key"]: bool(m.get("available", False)) for m in all_models}
+    default_model = str(status.get("defaultModel", "") or "")
+    allowed = status.get("allowed", []) if isinstance(status.get("allowed", []), list) else []
+
+    rows: List[Dict[str, Any]] = []
+    for key in allowed:
+        k = str(key or "").strip()
+        if not k:
+            continue
+        rows.append(
+            {
+                "key": k,
+                "provider": k.split("/", 1)[0] if "/" in k else "other",
+                "name": k.split("/", 1)[1] if "/" in k else k,
+                "isDefault": k == default_model,
+                "available": available_map.get(k),
+            }
+        )
+    return rows
+
+
+def _delete_provider_noninteractive(provider: str) -> Dict[str, Any]:
+    provider = _normalize_provider(provider)
+    if not provider:
+        return {"ok": False, "error": "provider is required"}
+
+    config.reload()
+    backup_path = config.backup() or ""
+
+    result = {
+        "ok": True,
+        "provider": provider,
+        "backupPath": backup_path,
+        "deletedModels": 0,
+        "deletedProfiles": 0,
+        "deletedAuthProfiles": 0,
+    }
+
+    providers_cfg = get_models_providers() or {}
+    if provider in providers_cfg:
+        del providers_cfg[provider]
+        if not set_models_providers(providers_cfg):
+            return {"ok": False, "error": "删除 models.providers 失败", "backupPath": backup_path}
+
+    config.reload()
+    models_map = config.data.get("agents", {}).get("defaults", {}).get("models", {})
+    if not isinstance(models_map, dict):
+        models_map = {}
+    to_delete = [k for k in list(models_map.keys()) if str(k).startswith(f"{provider}/")]
+    for key in to_delete:
+        del models_map[key]
+    result["deletedModels"] = len(to_delete)
+    config.save()
     config.reload()
 
-    default_model = get_default_model() or ""
-    fallback_models = get_fallbacks() or []
+    if os.path.exists(DEFAULT_AUTH_PROFILES_PATH):
+        try:
+            with open(DEFAULT_AUTH_PROFILES_PATH, "r", encoding="utf-8") as f:
+                ap = json.load(f)
+            profiles = ap.get("profiles", {}) if isinstance(ap.get("profiles"), dict) else {}
+            keys = [k for k, v in profiles.items() if isinstance(v, dict) and _normalize_provider(v.get("provider", "")) == provider]
+            for key in keys:
+                del profiles[key]
+            result["deletedProfiles"] = len(keys)
+            with open(DEFAULT_AUTH_PROFILES_PATH, "w", encoding="utf-8") as f:
+                json.dump(ap, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    try:
+        with open(DEFAULT_CONFIG_PATH, "r", encoding="utf-8") as f:
+            full = json.load(f)
+        auth_profiles = full.get("auth", {}).get("profiles", {}) if isinstance(full.get("auth", {}).get("profiles", {}), dict) else {}
+        keys = [k for k, v in auth_profiles.items() if isinstance(v, dict) and _normalize_provider(v.get("provider", "")) == provider]
+        for key in keys:
+            del auth_profiles[key]
+        result["deletedAuthProfiles"] = len(keys)
+        with open(DEFAULT_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(full, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+    config.reload()
+    return result
+
+
+def _state_payload(force: bool = False, include_usage: bool = False) -> Dict[str, Any]:
+    config.reload()
+
+    usage = _load_usage(force=force) if include_usage else (_CACHE.get("usage", {}).get("value") or {"code": 0, "raw": "", "error": ""})
+
+    defaults_model = config.data.get("agents", {}).get("defaults", {}).get("model")
+    default_model, fallback_models = _extract_model_cfg(defaults_model)
     spawn_primary, spawn_fallbacks = get_spawn_model_policy()
     agent_overrides = list_agent_model_override_details()
 
@@ -263,7 +454,18 @@ def _state_payload() -> Dict[str, Any]:
     defaults_sub = config.data.get("agents", {}).get("defaults", {}).get("subagents", {}) or {}
     global_sub_max = defaults_sub.get("maxConcurrent", 8)
 
+    active_models_cfg = config.data.get("agents", {}).get("defaults", {}).get("models", {})
+    if isinstance(active_models_cfg, dict):
+        active_keys = [str(k) for k in active_models_cfg.keys() if str(k).strip()]
+    else:
+        active_keys = []
+
     return {
+        "runtime": {
+            "sandboxEnabled": bool(is_sandbox_enabled()),
+            "configPath": DEFAULT_CONFIG_PATH,
+            "webTokenHint": f"{WEB_TOKEN[:4]}******" if WEB_TOKEN else "(empty)",
+        },
         "globalModel": {
             "primary": default_model,
             "fallbacks": fallback_models,
@@ -275,10 +477,15 @@ def _state_payload() -> Dict[str, Any]:
         },
         "agents": _serialize_agents(),
         "inventory": {
-            "rows": _provider_inventory_rows(),
+            "rows": _provider_inventory_rows(force=force),
         },
         "dispatch": {
             "globalMaxConcurrent": global_sub_max,
+        },
+        "health": {
+            "status": {},
+            "usage": usage,
+            "activeModels": [],
         },
         "search": {
             "defaultProvider": search_provider,
@@ -288,8 +495,13 @@ def _state_payload() -> Dict[str, Any]:
             "adapterConfig": adapter_cfg,
             "availableUnifiedSources": OFFICIAL_SEARCH_SOURCES + [f"adapter:{k}" for k in ADAPTER_SPECS.keys()],
         },
-        "modelCatalog": config.get_all_models_flat(),
-        "officialProviderOptions": get_official_provider_options(),
+        "modelCatalog": {
+            "all": [],
+            "providers": [],
+            "activeKeys": active_keys,
+        },
+        "officialProviderOptions": [],
+        "providerProtocols": list(API_PROTOCOLS),
     }
 
 
@@ -365,9 +577,32 @@ class SearchTestIn(BaseModel):
     count: int = 3
 
 
+class ProviderApiKeyIn(BaseModel):
+    provider: str
+    apiKey: str
+    baseUrl: str = ""
+
+
+class CustomProviderIn(BaseModel):
+    provider: str
+    api: str
+    baseUrl: str
+    apiKey: str
+    discoverModels: bool = True
+
+
+class DiscoverModelsIn(BaseModel):
+    provider: str
+
+
+class ModelToggleIn(BaseModel):
+    key: str
+    activate: bool = True
+
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard(request: Request):
-    _ = request  # 保留 request 参数，便于后续扩展
+    _ = request
     index_path = BASE_DIR / "templates" / "index.html"
     if not index_path.exists():
         raise HTTPException(status_code=500, detail="index.html not found")
@@ -381,10 +616,15 @@ async def get_state():
 
 @app.get("/api/health", dependencies=[Depends(verify_token)])
 async def get_health_status():
-    ok, data = safe_exec_json(["status"])
-    if not ok:
-        raise HTTPException(status_code=500, detail=data.get("error", "Unknown error"))
-    return data
+    status = _load_status(force=False)
+    usage = _load_usage(force=False)
+    all_models = _load_all_models(force=False)
+    active_models = _build_active_model_rows(status, all_models)
+    return {
+        "status": status,
+        "usage": usage,
+        "activeModels": active_models,
+    }
 
 
 @app.post("/api/models/global", dependencies=[Depends(verify_token)])
@@ -392,7 +632,8 @@ async def set_global_model_policy(body: GlobalModelPolicyIn):
     ok = _set_global_model_policy(body.primary, body.fallbacks)
     if not ok:
         raise HTTPException(status_code=500, detail="保存全局模型策略失败")
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
 
 
 @app.post("/api/models/agent", dependencies=[Depends(verify_token)])
@@ -400,7 +641,8 @@ async def set_agent_model_policy_api(body: AgentModelPolicyIn):
     ok = set_agent_model_policy(body.agentId, body.primary, ",".join(body.fallbacks))
     if not ok:
         raise HTTPException(status_code=400, detail="设置 Agent 模型策略失败")
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
 
 
 @app.delete("/api/models/agent/{agent_id}", dependencies=[Depends(verify_token)])
@@ -408,7 +650,8 @@ async def clear_agent_model_policy_api(agent_id: str):
     ok = clear_agent_model_policy(agent_id)
     if not ok:
         raise HTTPException(status_code=400, detail="清除 Agent 模型策略失败")
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
 
 
 @app.post("/api/models/spawn", dependencies=[Depends(verify_token)])
@@ -416,7 +659,8 @@ async def set_spawn_model_policy_api(body: SpawnModelPolicyIn):
     ok = set_spawn_model_policy(body.primary, ",".join(body.fallbacks))
     if not ok:
         raise HTTPException(status_code=500, detail="设置 Spawn 模型策略失败")
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
 
 
 @app.delete("/api/models/spawn", dependencies=[Depends(verify_token)])
@@ -424,7 +668,42 @@ async def clear_spawn_model_policy_api():
     ok = set_spawn_model_policy("", "")
     if not ok:
         raise HTTPException(status_code=500, detail="清除 Spawn 模型策略失败")
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
+
+
+@app.post("/api/models/toggle", dependencies=[Depends(verify_token)])
+async def toggle_model_api(body: ModelToggleIn):
+    key = str(body.key or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="model key is required")
+    if body.activate:
+        ok, err = activate_model(key)
+    else:
+        ok, err = deactivate_model(key)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"模型操作失败: {err}")
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
+
+
+@app.get("/api/models/catalog", dependencies=[Depends(verify_token)])
+async def get_models_catalog_api():
+    all_models = _load_all_models(force=False)
+    provider_set = sorted(set([m.get("provider", "") for m in all_models if m.get("provider")]))
+    config.reload()
+    models_cfg = config.data.get("agents", {}).get("defaults", {}).get("models", {})
+    if isinstance(models_cfg, dict):
+        active_keys = [str(x) for x in models_cfg.keys() if str(x).strip()]
+    else:
+        active_keys = []
+    return {
+        "modelCatalog": {
+            "all": all_models,
+            "providers": provider_set,
+            "activeKeys": active_keys,
+        }
+    }
 
 
 @app.post("/api/agents", dependencies=[Depends(verify_token)])
@@ -442,7 +721,8 @@ async def create_agent_api(body: CreateAgentIn):
     )
     if not ok:
         raise HTTPException(status_code=400, detail="创建 Agent 失败，请检查 Agent ID 或 workspace 路径")
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
 
 
 @app.post("/api/agents/workspace", dependencies=[Depends(verify_token)])
@@ -470,7 +750,8 @@ async def bind_workspace_api(body: BindWorkspaceIn):
     )
     if not ok:
         raise HTTPException(status_code=400, detail="绑定 workspace 失败")
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
 
 
 @app.post("/api/agents/security", dependencies=[Depends(verify_token)])
@@ -478,7 +759,8 @@ async def set_agent_security_api(body: AgentSecurityIn):
     ok = _set_workspace_restriction(body.agentId, body.workspaceOnly)
     if not ok:
         raise HTTPException(status_code=400, detail="更新访问限制失败")
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
 
 
 @app.post("/api/agents/whitelist", dependencies=[Depends(verify_token)])
@@ -489,7 +771,8 @@ async def set_control_whitelist_api(body: ControlWhitelistIn):
     ok = set_agent_control_plane_whitelist(body.agentId, body.enabled, caps)
     if not ok:
         raise HTTPException(status_code=400, detail="更新命令白名单失败")
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
 
 
 @app.post("/api/dispatch", dependencies=[Depends(verify_token)])
@@ -503,23 +786,138 @@ async def set_dispatch_policy_api(body: DispatchPolicyIn):
     )
     if not ok:
         raise HTTPException(status_code=400, detail="更新派发策略失败")
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
+
+
+@app.post("/api/providers/api-key", dependencies=[Depends(verify_token)])
+async def upsert_provider_api_key_api(body: ProviderApiKeyIn):
+    provider = _normalize_provider(body.provider)
+    api_key = str(body.apiKey or "").strip()
+    if not provider or not api_key:
+        raise HTTPException(status_code=400, detail="provider/apiKey 必填")
+
+    providers_cfg = get_models_providers() or {}
+    existing_cfg = providers_cfg.get(provider, {}) if isinstance(providers_cfg.get(provider), dict) else {}
+    default_base_url = (body.baseUrl or "").strip() or str(existing_cfg.get("baseUrl", "") or "").strip()
+    if not default_base_url:
+        default_base_url = PROVIDER_DEFAULT_BASE_URLS.get(provider, "")
+
+    ok, err = upsert_provider_api_key(provider, api_key, default_base_url=default_base_url)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"写入服务商 API Key 失败: {err}")
+
+    if body.baseUrl.strip() or default_base_url:
+        providers_cfg.setdefault(provider, {})
+        providers_cfg[provider]["baseUrl"] = (body.baseUrl or "").strip() or default_base_url
+        set_models_providers(providers_cfg)
+
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
+
+
+@app.post("/api/providers/custom", dependencies=[Depends(verify_token)])
+async def add_custom_provider_api(body: CustomProviderIn):
+    provider = _normalize_provider(body.provider)
+    if not provider:
+        raise HTTPException(status_code=400, detail="provider 必填")
+
+    if body.api not in API_PROTOCOLS:
+        raise HTTPException(status_code=400, detail=f"不支持的协议: {body.api}")
+
+    chosen_api = body.api
+    ok, err, discovered_count, discover_err = configure_custom_provider_config(
+        provider=provider,
+        api_proto=chosen_api,
+        base_url=body.baseUrl.strip(),
+        api_key=body.apiKey.strip(),
+        discover_models=bool(body.discoverModels),
+    )
+    adapted_api: Dict[str, str] = {}
+    if (not ok) and err and "Invalid input" in str(err):
+        fallback_api = API_PROTOCOL_FALLBACKS.get(chosen_api, "")
+        if fallback_api and fallback_api in API_PROTOCOLS and fallback_api != chosen_api:
+            ok, err, discovered_count, discover_err = configure_custom_provider_config(
+                provider=provider,
+                api_proto=fallback_api,
+                base_url=body.baseUrl.strip(),
+                api_key=body.apiKey.strip(),
+                discover_models=bool(body.discoverModels),
+            )
+            if ok:
+                adapted_api = {"from": chosen_api, "to": fallback_api}
+
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"添加自定义服务商失败: {err}")
+
+    _invalidate_cache()
+    return {
+        "ok": True,
+        "adaptedApi": adapted_api,
+        "discoveredCount": discovered_count,
+        "discoverError": discover_err,
+        "state": _state_payload(force=True),
+    }
+
+
+@app.post("/api/providers/discover-models", dependencies=[Depends(verify_token)])
+async def discover_provider_models_api(body: DiscoverModelsIn):
+    provider = _normalize_provider(body.provider)
+    providers_cfg = get_models_providers() or {}
+    p_cfg = providers_cfg.get(provider, {}) if isinstance(providers_cfg.get(provider), dict) else {}
+    base_url = str(p_cfg.get("baseUrl", "") or "").strip()
+    api_key = str(p_cfg.get("apiKey", "") or "").strip()
+
+    if not base_url:
+        raise HTTPException(status_code=400, detail="该服务商未配置 baseUrl，无法自动发现")
+
+    try:
+        discovered = get_custom_models(provider, base_url, api_key)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"自动发现失败: {e}")
+
+    normalized_models = []
+    for row in discovered:
+        key = (row.get("key") or row.get("id") or row.get("name") or "").strip()
+        if not key:
+            continue
+        model_id = key.split("/", 1)[1] if key.startswith(f"{provider}/") else key
+        normalized_models.append({"id": model_id, "name": row.get("name") or model_id})
+
+    providers_cfg.setdefault(provider, {})
+    providers_cfg[provider].setdefault("models", [])
+    providers_cfg[provider]["models"] = normalized_models
+    if not set_models_providers(providers_cfg):
+        raise HTTPException(status_code=500, detail="写入发现模型失败")
+
+    _invalidate_cache()
+    return {"ok": True, "count": len(normalized_models), "state": _state_payload(force=True)}
+
+
+@app.delete("/api/providers/{provider}", dependencies=[Depends(verify_token)])
+async def delete_provider_api(provider: str):
+    result = _delete_provider_noninteractive(provider)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "删除服务商失败"))
+    _invalidate_cache()
+    return {"ok": True, "result": result, "state": _state_payload(force=True)}
 
 
 @app.get("/api/providers/options", dependencies=[Depends(verify_token)])
 async def get_provider_options_api():
-    return {"options": get_official_provider_options()}
+    return {"options": _get_official_provider_options(force=False)}
 
 
 @app.post("/api/providers/refresh-model-pool", dependencies=[Depends(verify_token)])
 async def refresh_model_pool_api():
     ok, message = refresh_official_model_pool()
-    return {"ok": ok, "message": message, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": ok, "message": message, "state": _state_payload(force=True)}
 
 
 @app.post("/api/search/official", dependencies=[Depends(verify_token)])
 async def set_official_search_api(body: OfficialSearchConfigIn):
-    provider = (body.provider or "").strip().lower()
+    provider = _normalize_provider(body.provider)
     if provider not in OFFICIAL_SEARCH_SPECS:
         raise HTTPException(status_code=400, detail="不支持的官方搜索服务")
 
@@ -535,34 +933,25 @@ async def set_official_search_api(body: OfficialSearchConfigIn):
         if not ok:
             raise HTTPException(status_code=500, detail="激活默认搜索服务失败")
 
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
 
 
 @app.delete("/api/search/official/{provider}", dependencies=[Depends(verify_token)])
 async def clear_official_search_api(provider: str):
-    pid = (provider or "").strip().lower()
+    pid = _normalize_provider(provider)
     if pid not in OFFICIAL_SEARCH_SPECS:
         raise HTTPException(status_code=400, detail="不支持的官方搜索服务")
     ok = _clear_official_key_in_config(pid)
     if not ok:
         raise HTTPException(status_code=500, detail="清空官方搜索配置失败")
-    return {"ok": True, "state": _state_payload()}
-
-
-@app.post("/api/search/activate", dependencies=[Depends(verify_token)])
-async def activate_default_search_provider(provider: str):
-    pid = (provider or "").strip().lower()
-    if pid and pid not in OFFICIAL_SEARCH_SPECS:
-        raise HTTPException(status_code=400, detail="不支持的默认搜索服务")
-    ok = set_search_provider(pid)
-    if not ok:
-        raise HTTPException(status_code=500, detail="设置默认搜索服务失败")
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
 
 
 @app.post("/api/search/adapter", dependencies=[Depends(verify_token)])
 async def set_adapter_search_api(body: AdapterSearchConfigIn):
-    pid = (body.provider or "").strip().lower()
+    pid = _normalize_provider(body.provider)
     if pid not in ADAPTER_SPECS:
         raise HTTPException(status_code=400, detail="不支持的扩展搜索服务")
     ok = update_search_adapter_provider(
@@ -578,12 +967,13 @@ async def set_adapter_search_api(body: AdapterSearchConfigIn):
     )
     if not ok:
         raise HTTPException(status_code=500, detail="保存扩展搜索配置失败")
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
 
 
 @app.post("/api/search/failover", dependencies=[Depends(verify_token)])
 async def set_search_failover_api(body: SearchFailoverIn):
-    primary = (body.primarySource or "").strip().lower()
+    primary = str(body.primarySource or "").strip().lower()
     fallbacks = [str(x).strip().lower() for x in (body.fallbackSources or []) if str(x).strip()]
 
     ok_primary = set_primary_source(primary)
@@ -591,7 +981,8 @@ async def set_search_failover_api(body: SearchFailoverIn):
     if not ok_primary or not ok_fallback:
         raise HTTPException(status_code=400, detail="设置主备搜索链失败")
 
-    return {"ok": True, "state": _state_payload()}
+    _invalidate_cache()
+    return {"ok": True, "state": _state_payload(force=True)}
 
 
 @app.post("/api/search/test", dependencies=[Depends(verify_token)])
