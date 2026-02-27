@@ -108,13 +108,13 @@ easyclaw/
 ├── cmd/                 # 命令工具
 ├── web/                 # Web 服务端
 ├── webui/               # Web UI 相关资源
-└── test_*.py            # 回归测试
+└── tests/               # 回归测试
 ```
 
 ## 开发与测试
 
 ```bash
-python3 -m unittest discover -p "test_*.py" -q
+python3 -m unittest discover -s tests -p "test_*.py" -q
 ```
 
 说明：

@@ -62,5 +62,5 @@ fix.py
 mock_openclaw.py
 
 # Local docker debug tests (contain environment-specific setup; do not commit)
-test_docker_debug.py
-test_docker_openrouter.py
+tests/test_docker_debug.py
+tests/test_docker_openrouter.py
