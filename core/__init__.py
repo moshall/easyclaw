@@ -7,11 +7,15 @@ import subprocess
 from copy import deepcopy
 from datetime import datetime
 from typing import Any, Optional, Dict, List
+from .agent_runtime import resolve_agent_runtime_paths
 
 # 配置路径
 DEFAULT_CONFIG_PATH = os.environ.get("OPENCLAW_CONFIG_PATH", "/root/.openclaw/openclaw.json")
 DEFAULT_BACKUP_DIR = os.environ.get("OPENCLAW_BACKUP_DIR", "/root/.openclaw/backups")
-DEFAULT_AUTH_PROFILES_PATH = os.environ.get("OPENCLAW_AUTH_PROFILES_PATH", "/root/.openclaw/agents/main/agent/auth-profiles.json")
+DEFAULT_AUTH_PROFILES_PATH = os.environ.get(
+    "OPENCLAW_AUTH_PROFILES_PATH",
+    resolve_agent_runtime_paths("main", DEFAULT_CONFIG_PATH)["auth_profiles"],
+)
 DEFAULT_ENV_PATH = os.environ.get("OPENCLAW_ENV_PATH", "/root/.openclaw/.env")
 DEFAULT_ENV_TEMPLATE_PATH = os.environ.get("OPENCLAW_ENV_TEMPLATE_PATH", "/root/.openclaw/workspace/templates/openclaw.env.example")
 
@@ -28,16 +32,15 @@ INVALID_TOKEN_PATTERNS = [
 ]
 
 
-def _agent_security_store_path() -> str:
+def _agent_meta_store_path() -> str:
     base_dir = os.path.dirname(DEFAULT_CONFIG_PATH) or "."
-    default_path = os.path.join(base_dir, "easyclaw", "agent_security.json")
-    return os.environ.get("OPENCLAW_AGENT_SECURITY_PATH", default_path)
+    default_path = os.path.join(base_dir, "easyclaw", "agent_meta.json")
+    return os.environ.get("OPENCLAW_AGENT_META_PATH", default_path)
 
 
-def _normalize_security_record(value: Any) -> Optional[Dict[str, Any]]:
+def _normalize_control_plane_record(value: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(value, dict):
         return None
-    workspace_scope = "workspace-only" if str(value.get("workspaceScope", "")).strip() == "workspace-only" else "full"
     raw_caps = value.get("controlPlaneCapabilities", [])
     caps: List[str] = []
     if isinstance(raw_caps, list):
@@ -45,11 +48,11 @@ def _normalize_security_record(value: Any) -> Optional[Dict[str, Any]]:
             token = str(item or "").strip()
             if token and token not in caps:
                 caps.append(token)
-    return {"workspaceScope": workspace_scope, "controlPlaneCapabilities": caps}
+    return {"controlPlaneCapabilities": caps}
 
 
-def _load_agent_security_store() -> Dict[str, Any]:
-    path = _agent_security_store_path()
+def _load_agent_meta_store() -> Dict[str, Any]:
+    path = _agent_meta_store_path()
     try:
         if not os.path.exists(path):
             return {"agents": {}}
@@ -65,9 +68,9 @@ def _load_agent_security_store() -> Dict[str, Any]:
         return {"agents": {}}
 
 
-def _save_agent_security_store(data: Dict[str, Any]) -> bool:
+def _save_agent_meta_store(data: Dict[str, Any]) -> bool:
     try:
-        path = _agent_security_store_path()
+        path = _agent_meta_store_path()
         parent = os.path.dirname(path)
         if parent and not os.path.exists(parent):
             os.makedirs(parent, exist_ok=True)
@@ -78,13 +81,13 @@ def _save_agent_security_store(data: Dict[str, Any]) -> bool:
         return False
 
 
-def _extract_agent_security_map(data: Dict[str, Any]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
+def _sync_agent_meta_store_from_legacy_data(data: Dict[str, Any]) -> bool:
     ids: List[str] = []
-    sec_map: Dict[str, Dict[str, Any]] = {}
+    caps_map: Dict[str, Dict[str, Any]] = {}
     agents = data.get("agents", {}) if isinstance(data, dict) else {}
     agents_list = agents.get("list", []) if isinstance(agents, dict) else []
     if not isinstance(agents_list, list):
-        return ids, sec_map
+        return True
     for row in agents_list:
         if not isinstance(row, dict):
             continue
@@ -92,19 +95,10 @@ def _extract_agent_security_map(data: Dict[str, Any]) -> tuple[List[str], Dict[s
         if not aid:
             continue
         ids.append(aid)
-        normalized = _normalize_security_record(row.get("security"))
+        normalized = _normalize_control_plane_record(row.get("security"))
         if normalized:
-            sec_map[aid] = normalized
-    return ids, sec_map
-
-
-def _sync_agent_security_store_from_data(data: Dict[str, Any]) -> bool:
-    agents = data.get("agents", {}) if isinstance(data, dict) else {}
-    agents_list = agents.get("list", None) if isinstance(agents, dict) else None
-    if not isinstance(agents_list, list):
-        return True
-    ids, sec_map = _extract_agent_security_map(data if isinstance(data, dict) else {})
-    store = _load_agent_security_store()
+            caps_map[aid] = normalized
+    store = _load_agent_meta_store()
     agents_store = store.get("agents", {})
     if not isinstance(agents_store, dict):
         agents_store = {}
@@ -112,36 +106,55 @@ def _sync_agent_security_store_from_data(data: Dict[str, Any]) -> bool:
         if aid not in ids:
             agents_store.pop(aid, None)
     for aid in ids:
-        if aid in sec_map:
-            agents_store[aid] = sec_map[aid]
-        else:
-            agents_store.pop(aid, None)
+        existing = agents_store.get(aid, {})
+        if not isinstance(existing, dict):
+            existing = {}
+        if aid in caps_map:
+            existing["controlPlaneCapabilities"] = caps_map[aid]["controlPlaneCapabilities"]
+        agents_store[aid] = existing
     store["agents"] = agents_store
-    return _save_agent_security_store(store)
+    return _save_agent_meta_store(store)
 
 
-def _inject_agent_security_into_data(data: Dict[str, Any]) -> None:
-    if not isinstance(data, dict):
-        return
-    agents = data.get("agents", {})
-    if not isinstance(agents, dict):
-        return
-    agents_list = agents.get("list", [])
-    if not isinstance(agents_list, list):
-        return
-    store = _load_agent_security_store()
+def get_agent_control_plane_capabilities(agent_id: str) -> List[str]:
+    aid = str(agent_id or "").strip()
+    if not aid:
+        return []
+    store = _load_agent_meta_store()
     agents_store = store.get("agents", {}) if isinstance(store.get("agents", {}), dict) else {}
-    for row in agents_list:
-        if not isinstance(row, dict):
-            continue
-        aid = str(row.get("id", "") or "").strip()
-        if not aid:
-            continue
-        normalized = _normalize_security_record(agents_store.get(aid))
-        if normalized:
-            row["security"] = normalized
-        else:
-            row.pop("security", None)
+    record = agents_store.get(aid, {}) if isinstance(agents_store.get(aid, {}), dict) else {}
+    normalized = _normalize_control_plane_record(record)
+    if not normalized:
+        return []
+    return normalized["controlPlaneCapabilities"]
+
+
+def set_agent_control_plane_capabilities(agent_id: str, capabilities: Optional[List[str]] = None) -> bool:
+    aid = str(agent_id or "").strip()
+    if not aid:
+        return False
+    caps = []
+    for item in (capabilities or []):
+        token = str(item or "").strip()
+        if token and token not in caps:
+            caps.append(token)
+    store = _load_agent_meta_store()
+    agents_store = store.get("agents", {})
+    if not isinstance(agents_store, dict):
+        agents_store = {}
+    record = agents_store.get(aid, {})
+    if not isinstance(record, dict):
+        record = {}
+    if caps:
+        record["controlPlaneCapabilities"] = caps
+        agents_store[aid] = record
+    else:
+        if aid in agents_store:
+            agents_store[aid].pop("controlPlaneCapabilities", None)
+            if not agents_store[aid]:
+                agents_store.pop(aid, None)
+    store["agents"] = agents_store
+    return _save_agent_meta_store(store)
 
 
 def _normalize_model_config(value: Any) -> Optional[Dict[str, Any]]:
@@ -245,7 +258,7 @@ def _repair_openclaw_config_if_needed() -> bool:
             raw = json.load(f)
         if not isinstance(raw, dict):
             return False
-        _sync_agent_security_store_from_data(raw)
+        _sync_agent_meta_store_from_legacy_data(raw)
         fixed, changed = _sanitize_openclaw_payload(raw)
         if not changed:
             return False
@@ -282,8 +295,6 @@ class OpenClawConfig:
             if os.path.exists(self.path):
                 with open(self.path, 'r', encoding="utf-8") as f:
                     self.data = json.load(f)
-                if isinstance(self.data, dict):
-                    _inject_agent_security_into_data(self.data)
         except Exception as e:
             print(f"加载配置失败: {e}")
             self.data = {}
@@ -298,7 +309,7 @@ class OpenClawConfig:
             if self._is_dry_run():
                 return True
 
-            _sync_agent_security_store_from_data(self.data if isinstance(self.data, dict) else {})
+            _sync_agent_meta_store_from_legacy_data(self.data if isinstance(self.data, dict) else {})
             payload, _ = _sanitize_openclaw_payload(self.data if isinstance(self.data, dict) else {})
 
             # 内容无变化则跳过备份/写入

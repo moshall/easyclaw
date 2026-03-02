@@ -21,9 +21,18 @@ from core import (
     DEFAULT_CONFIG_PATH,
     config,
     get_models_providers,
+    get_agent_control_plane_capabilities,
     run_cli,
     run_cli_json,
+    set_agent_control_plane_capabilities,
     set_models_providers,
+)
+from core.agent_runtime import (
+    ACCESS_MODE_LABELS,
+    CAPABILITY_PRESET_LABELS,
+    apply_agent_access_profile,
+    extract_agent_access_profile,
+    resolve_agent_runtime_paths,
 )
 from core.datasource import get_custom_models
 from core.search_adapters import (
@@ -46,6 +55,7 @@ from tui.inventory import (
 from tui.routing import (
     RECOMMENDED_CONTROL_PLANE_CAPABILITIES,
     clear_agent_model_policy,
+    create_agent_with_official_cli,
     get_spawn_model_policy,
     list_agent_model_override_details,
     set_agent_control_plane_whitelist,
@@ -257,11 +267,14 @@ def _agent_by_id(agent_id: str) -> Dict[str, Any]:
     return {}
 
 
-def _agent_security(agent: Dict[str, Any]) -> Dict[str, Any]:
-    sec = agent.get("security") if isinstance(agent.get("security"), dict) else {}
+def _agent_access(agent: Dict[str, Any]) -> Dict[str, Any]:
+    access = extract_agent_access_profile(agent)
     return {
-        "workspaceOnly": sec.get("workspaceScope") == "workspace-only",
-        "controlPlaneCapabilities": sec.get("controlPlaneCapabilities", []) if isinstance(sec.get("controlPlaneCapabilities", []), list) else [],
+        "accessMode": access["access_mode"],
+        "accessLabel": access["access_label"],
+        "capabilityPreset": access["capability_preset"],
+        "capabilityLabel": access["capability_label"],
+        "controlPlaneCapabilities": get_agent_control_plane_capabilities(str(agent.get("id", "") or "")),
     }
 
 
@@ -284,14 +297,15 @@ def _serialize_agents() -> List[Dict[str, Any]]:
         aid = str(agent.get("id", "") or "").strip()
         if not aid:
             continue
-        sec = _agent_security(agent)
+        runtime_paths = resolve_agent_runtime_paths(aid, config.path)
+        access = _agent_access(agent)
         sub = _agent_subagents(agent)
         primary, fallbacks = _extract_model_cfg(agent.get("model"))
         out.append(
             {
                 "id": aid,
-                "workspace": str(agent.get("workspace", "") or "").strip(),
-                "security": sec,
+                "workspace": str(agent.get("workspace", "") or runtime_paths["workspace"]).strip(),
+                "access": access,
                 "subagents": sub,
                 "model": {
                     "primary": primary,
@@ -318,11 +332,11 @@ def _set_global_model_policy(primary: str, fallbacks: List[str]) -> bool:
     return ok
 
 
-def _set_workspace_restriction(agent_id: str, workspace_only: bool) -> bool:
+def _set_agent_access_policy(agent_id: str, access_mode: str, capability_preset: str) -> bool:
     target = _agent_by_id(agent_id)
     if not target:
         return False
-    workspace = str(target.get("workspace", "") or "").strip()
+    workspace = str(target.get("workspace", "") or resolve_agent_runtime_paths(agent_id, config.path)["workspace"]).strip()
     if not workspace:
         return False
 
@@ -330,7 +344,7 @@ def _set_workspace_restriction(agent_id: str, workspace_only: bool) -> bool:
     sub = target.get("subagents") if isinstance(target.get("subagents"), dict) else {}
     allow_agents = sub.get("allowAgents") if isinstance(sub.get("allowAgents"), list) else []
     sub_model_primary, sub_model_fallbacks = _extract_model_cfg(sub.get("model"))
-    sec = _agent_security(target)
+    access = _agent_access(target)
 
     return upsert_main_agent_config(
         agent_id=agent_id,
@@ -340,8 +354,9 @@ def _set_workspace_restriction(agent_id: str, workspace_only: bool) -> bool:
         allow_agents=allow_agents,
         sub_model_primary=sub_model_primary,
         sub_model_fallbacks_csv=",".join(sub_model_fallbacks),
-        workspace_restricted=workspace_only,
-        control_plane_capabilities=sec["controlPlaneCapabilities"] if workspace_only else [],
+        access_mode=access_mode,
+        capability_preset=capability_preset,
+        control_plane_capabilities=access["controlPlaneCapabilities"],
     )
 
 
@@ -644,7 +659,8 @@ class SpawnModelPolicyIn(BaseModel):
 class CreateAgentIn(BaseModel):
     agentId: str
     workspace: str
-    workspaceOnly: bool = False
+    accessMode: str = "rw"
+    capabilityPreset: str = "workspace-collab"
 
 
 class BindWorkspaceIn(BaseModel):
@@ -654,7 +670,8 @@ class BindWorkspaceIn(BaseModel):
 
 class AgentSecurityIn(BaseModel):
     agentId: str
-    workspaceOnly: bool
+    accessMode: str = "rw"
+    capabilityPreset: str = "workspace-collab"
 
 
 class ControlWhitelistIn(BaseModel):
@@ -837,19 +854,15 @@ async def get_models_catalog_api():
 
 @app.post("/api/agents", dependencies=[Depends(verify_token)])
 async def create_agent_api(body: CreateAgentIn):
-    ok = upsert_main_agent_config(
+    ok, detail = create_agent_with_official_cli(
         agent_id=body.agentId,
         workspace_path=body.workspace,
-        model_primary="",
-        model_fallbacks_csv="",
-        allow_agents=[],
-        sub_model_primary="",
-        sub_model_fallbacks_csv="",
-        workspace_restricted=body.workspaceOnly,
-        control_plane_capabilities=RECOMMENDED_CONTROL_PLANE_CAPABILITIES if body.workspaceOnly else [],
+        access_mode=body.accessMode,
+        capability_preset=body.capabilityPreset,
+        control_plane_capabilities=[],
     )
     if not ok:
-        raise HTTPException(status_code=400, detail="创建 Agent 失败，请检查 Agent ID 或 workspace 路径")
+        raise HTTPException(status_code=400, detail=f"创建 Agent 失败: {detail}")
     _invalidate_cache()
     return {"ok": True, "state": _state_payload(force=True)}
 
@@ -864,7 +877,7 @@ async def bind_workspace_api(body: BindWorkspaceIn):
     sub_cfg = target.get("subagents") if isinstance(target.get("subagents"), dict) else {}
     allow_agents = sub_cfg.get("allowAgents") if isinstance(sub_cfg.get("allowAgents"), list) else []
     sub_model_primary, sub_model_fallbacks = _extract_model_cfg(sub_cfg.get("model"))
-    sec = _agent_security(target)
+    access = _agent_access(target)
 
     ok = upsert_main_agent_config(
         agent_id=body.agentId,
@@ -874,8 +887,9 @@ async def bind_workspace_api(body: BindWorkspaceIn):
         allow_agents=allow_agents,
         sub_model_primary=sub_model_primary,
         sub_model_fallbacks_csv=",".join(sub_model_fallbacks),
-        workspace_restricted=sec["workspaceOnly"],
-        control_plane_capabilities=sec["controlPlaneCapabilities"],
+        access_mode=access["accessMode"],
+        capability_preset=access["capabilityPreset"],
+        control_plane_capabilities=access["controlPlaneCapabilities"],
     )
     if not ok:
         raise HTTPException(status_code=400, detail="绑定 workspace 失败")
@@ -885,7 +899,7 @@ async def bind_workspace_api(body: BindWorkspaceIn):
 
 @app.post("/api/agents/security", dependencies=[Depends(verify_token)])
 async def set_agent_security_api(body: AgentSecurityIn):
-    ok = _set_workspace_restriction(body.agentId, body.workspaceOnly)
+    ok = _set_agent_access_policy(body.agentId, body.accessMode, body.capabilityPreset)
     if not ok:
         raise HTTPException(status_code=400, detail="更新访问限制失败")
     _invalidate_cache()

@@ -15,7 +15,21 @@ from rich.text import Text
 from rich.prompt import Prompt, Confirm
 from rich import box
 
-from core import config, run_cli, run_cli_json, OPENCLAW_BIN
+from core import (
+    OPENCLAW_BIN,
+    config,
+    get_agent_control_plane_capabilities,
+    run_cli,
+    run_cli_json,
+    set_agent_control_plane_capabilities,
+)
+from core.agent_runtime import (
+    ACCESS_MODE_LABELS,
+    CAPABILITY_PRESET_LABELS,
+    apply_agent_access_profile,
+    extract_agent_access_profile,
+    resolve_agent_runtime_paths,
+)
 
 console = Console()
 
@@ -161,6 +175,32 @@ def _select_agent_id(ids: List[str], title: str = "请选择 Agent", default_id:
     return ""
 
 
+def _pick_access_mode(default_mode: str = "rw") -> str:
+    options = [("1", "none"), ("2", "ro"), ("3", "rw")]
+    reverse = {value: key for key, value in options}
+    console.print("\n[bold]访问范围:[/]")
+    for key, value in options:
+        console.print(f"  [cyan]{key}[/] {ACCESS_MODE_LABELS[value]}")
+    pick = Prompt.ask("[bold green]>[/]", choices=[x[0] for x in options], default=reverse.get(default_mode, "3"))
+    return dict(options).get(pick, "rw")
+
+
+def _pick_capability_preset(default_preset: str = "workspace-collab") -> str:
+    options = [
+        ("1", "full-access"),
+        ("2", "readonly-analysis"),
+        ("3", "safe-exec"),
+        ("4", "workspace-collab"),
+        ("5", "messaging"),
+    ]
+    reverse = {value: key for key, value in options}
+    console.print("\n[bold]能力级别:[/]")
+    for key, value in options:
+        console.print(f"  [cyan]{key}[/] {CAPABILITY_PRESET_LABELS[value]}")
+    pick = Prompt.ask("[bold green]>[/]", choices=[x[0] for x in options], default=reverse.get(default_preset, "4"))
+    return dict(options).get(pick, "workspace-collab")
+
+
 def _workspace_root_base() -> str:
     defaults = config.data.get("agents", {}).get("defaults", {}) or {}
     base_workspace = str(defaults.get("workspace", "/root/.openclaw/workspace") or "/root/.openclaw/workspace").rstrip("/")
@@ -292,8 +332,10 @@ def upsert_main_agent_config(
     allow_agents: Optional[List[str]] = None,
     sub_model_primary: str = "",
     sub_model_fallbacks_csv: str = "",
-    workspace_restricted: bool = False,
+    access_mode: str = "rw",
+    capability_preset: str = "workspace-collab",
     control_plane_capabilities: Optional[List[str]] = None,
+    require_existing: bool = False,
 ) -> bool:
     if not agent_id:
         return False
@@ -315,12 +357,7 @@ def upsert_main_agent_config(
     if sub_cfg:
         agent_entry["subagents"] = sub_cfg
 
-    if workspace_restricted:
-        caps = [x for x in (control_plane_capabilities or []) if str(x).strip()]
-        agent_entry["security"] = {
-            "workspaceScope": "workspace-only",
-            "controlPlaneCapabilities": caps,
-        }
+    apply_agent_access_profile(agent_entry, access_mode, capability_preset)
 
     agents_root = config.data.setdefault("agents", {})
     agents_list = agents_root.get("list")
@@ -349,20 +386,23 @@ def upsert_main_agent_config(
             else:
                 merged.pop("subagents", None)
 
-            if "security" in agent_entry:
-                merged["security"] = agent_entry["security"]
-            else:
-                merged.pop("security", None)
+            merged.pop("security", None)
+            merged["sandbox"] = agent_entry["sandbox"]
+            merged["tools"] = agent_entry["tools"]
 
             agents_list[i] = merged
             replaced = True
             break
+    if not replaced and require_existing:
+        return False
     if not replaced:
         agents_list.append(agent_entry)
 
     _ensure_workspace_scaffold(workspace_path, agent_id)
     _ensure_agent_runtime_dirs(agent_id)
-    return config.save()
+    if not config.save():
+        return False
+    return set_agent_control_plane_capabilities(agent_id, control_plane_capabilities or [])
 
 
 def _extract_agent_settings(target: dict) -> dict:
@@ -388,11 +428,11 @@ def _extract_agent_settings(target: dict) -> dict:
         sub_model_primary = str(existing_sub_model.get("primary", "") or "")
         sub_model_fallbacks = ",".join(existing_sub_model.get("fallbacks", []) or [])
 
-    sec_cfg = target.get("security") if isinstance(target.get("security"), dict) else {}
-    workspace_restricted = sec_cfg.get("workspaceScope") == "workspace-only"
-    control_caps = sec_cfg.get("controlPlaneCapabilities")
-    control_caps = control_caps if isinstance(control_caps, list) else []
-    workspace_path = str(target.get("workspace", "") or "").strip()
+    access = extract_agent_access_profile(target)
+    control_caps = get_agent_control_plane_capabilities(str(target.get("id", "") or ""))
+    workspace_path = str(
+        target.get("workspace", "") or resolve_agent_runtime_paths(str(target.get("id", "") or "main"), config.path)["workspace"]
+    ).strip()
 
     return {
         "workspace_path": workspace_path,
@@ -401,7 +441,10 @@ def _extract_agent_settings(target: dict) -> dict:
         "allow_agents": allow_agents,
         "sub_model_primary": sub_model_primary,
         "sub_model_fallbacks": sub_model_fallbacks,
-        "workspace_restricted": workspace_restricted,
+        "access_mode": access["access_mode"],
+        "capability_preset": access["capability_preset"],
+        "access_label": access["access_label"],
+        "capability_label": access["capability_label"],
         "control_caps": control_caps,
     }
 
@@ -425,9 +468,41 @@ def set_agent_control_plane_whitelist(agent_id: str, enabled: bool, capabilities
         allow_agents=settings["allow_agents"],
         sub_model_primary=settings["sub_model_primary"],
         sub_model_fallbacks_csv=settings["sub_model_fallbacks"],
-        workspace_restricted=settings["workspace_restricted"],
+        access_mode=settings["access_mode"],
+        capability_preset=settings["capability_preset"],
         control_plane_capabilities=caps,
     )
+
+
+def create_agent_with_official_cli(
+    agent_id: str,
+    workspace_path: str,
+    access_mode: str,
+    capability_preset: str,
+    control_plane_capabilities: Optional[List[str]] = None,
+) -> tuple[bool, str]:
+    stdout, stderr, code = run_cli(["agents", "add", agent_id, "--workspace", workspace_path])
+    if code != 0:
+        return False, stderr or stdout or "openclaw agents add failed"
+    config.reload()
+    if not _agent_by_id(agent_id):
+        return False, "官方 CLI 未写入 Agent，无法继续应用 EasyClaw 附加设置"
+    ok = upsert_main_agent_config(
+        agent_id=agent_id,
+        workspace_path=workspace_path,
+        model_primary="",
+        model_fallbacks_csv="",
+        allow_agents=[],
+        sub_model_primary="",
+        sub_model_fallbacks_csv="",
+        access_mode=access_mode,
+        capability_preset=capability_preset,
+        control_plane_capabilities=control_plane_capabilities or [],
+        require_existing=True,
+    )
+    if not ok:
+        return False, "官方创建成功，但写入访问范围/能力级别失败"
+    return True, stdout or "ok"
 
 
 def set_agent_model_policy(agent_id: str, primary: str, fallbacks_csv: str) -> bool:
@@ -445,7 +520,8 @@ def set_agent_model_policy(agent_id: str, primary: str, fallbacks_csv: str) -> b
         allow_agents=settings["allow_agents"],
         sub_model_primary=settings["sub_model_primary"],
         sub_model_fallbacks_csv=settings["sub_model_fallbacks"],
-        workspace_restricted=settings["workspace_restricted"],
+        access_mode=settings["access_mode"],
+        capability_preset=settings["capability_preset"],
         control_plane_capabilities=settings["control_caps"],
     )
 
@@ -647,7 +723,8 @@ def main_agent_settings_menu():
                     allow_agents=settings["allow_agents"],
                     sub_model_primary=settings["sub_model_primary"],
                     sub_model_fallbacks_csv=settings["sub_model_fallbacks"],
-                    workspace_restricted=settings["workspace_restricted"],
+                    access_mode=settings["access_mode"],
+                    capability_preset=settings["capability_preset"],
                     control_plane_capabilities=settings["control_caps"],
                 )
                 if ok:
@@ -697,7 +774,8 @@ def main_agent_settings_menu():
                     allow_agents=settings["allow_agents"],
                     sub_model_primary=settings["sub_model_primary"],
                     sub_model_fallbacks_csv=settings["sub_model_fallbacks"],
-                    workspace_restricted=settings["workspace_restricted"],
+                    access_mode=settings["access_mode"],
+                    capability_preset=settings["capability_preset"],
                     control_plane_capabilities=settings["control_caps"],
                 )
                 if ok:
@@ -725,14 +803,13 @@ def main_agent_settings_menu():
             table.add_column("Agent", style="cyan")
             table.add_column("工作区", style="bold")
             table.add_column("访问范围", style="yellow")
+            table.add_column("能力级别", style="yellow")
             table.add_column("模型策略", style="magenta")
             table.add_column("派发", style="green")
             table.add_column("健康", style="white")
             bound_count = 0
             bad_count = 0
             for a in agents:
-                sec = a.get("security") if isinstance(a.get("security"), dict) else {}
-                isolated = sec.get("workspaceScope") == "workspace-only"
                 settings = _extract_agent_settings(a)
                 model_overridden = bool(settings["model_primary"] or settings["model_fallbacks"])
                 allow_agents = settings["allow_agents"] if isinstance(settings["allow_agents"], list) else []
@@ -750,7 +827,8 @@ def main_agent_settings_menu():
                 table.add_row(
                     str(a.get("id", "")),
                     _short_workspace(str(a.get("workspace", "(未绑定)"))),
-                    "仅工作区" if isolated else "全部",
+                    settings["access_label"],
+                    settings["capability_label"],
                     "独立模型" if model_overridden else "跟随全局",
                     dispatch,
                     health,
@@ -770,7 +848,7 @@ def main_agent_settings_menu():
         console.print("[bold]操作:[/]")
         console.print("  [cyan]1[/] 新增 Agent")
         console.print("  [cyan]2[/] 工作区管理")
-        console.print("  [cyan]3[/] 访问限制与快捷命令放行")
+        console.print("  [cyan]3[/] 访问权限与快捷命令放行")
         console.print("  [cyan]0[/] 返回")
         console.print()
         choice = Prompt.ask("[bold green]>[/]", choices=["0", "1", "2", "3"], default="0")
@@ -804,22 +882,48 @@ def main_agent_settings_menu():
 
             current_caps = settings["control_caps"]
             current_str = ", ".join(current_caps) if current_caps else "(关闭)"
-            console.print(f"\n[dim]当前白名单: {current_str}[/]")
+            console.print(f"\n[dim]当前访问范围: {settings['access_label']}[/]")
+            console.print(f"[dim]当前能力级别: {settings['capability_label']}[/]")
+            console.print(f"[dim]当前快捷命令放行: {current_str}[/]")
             console.print("[bold]操作:[/]")
-            console.print("  [cyan]1[/] 开启(推荐能力集)")
-            console.print("  [cyan]2[/] 关闭(清空白名单)")
-            console.print("  [cyan]3[/] 自定义编辑")
+            console.print("  [cyan]1[/] 更新访问范围与能力级别")
+            console.print("  [cyan]2[/] 开启推荐快捷命令放行")
+            console.print("  [cyan]3[/] 关闭快捷命令放行")
+            console.print("  [cyan]4[/] 自定义快捷命令放行")
             console.print("  [cyan]0[/] 返回")
-            op = Prompt.ask("[bold green]>[/]", choices=["0", "1", "2", "3"], default="0")
+            op = Prompt.ask("[bold green]>[/]", choices=["0", "1", "2", "3", "4"], default="0")
             if op == "0":
                 continue
             if op == "1":
+                access_mode = _pick_access_mode(settings["access_mode"])
+                capability_preset = _pick_capability_preset(settings["capability_preset"])
+                ok = upsert_main_agent_config(
+                    agent_id=agent_id,
+                    workspace_path=settings["workspace_path"],
+                    model_primary=settings["model_primary"],
+                    model_fallbacks_csv=settings["model_fallbacks"],
+                    allow_agents=settings["allow_agents"],
+                    sub_model_primary=settings["sub_model_primary"],
+                    sub_model_fallbacks_csv=settings["sub_model_fallbacks"],
+                    access_mode=access_mode,
+                    capability_preset=capability_preset,
+                    control_plane_capabilities=current_caps,
+                )
+                if ok:
+                    console.print("\n[green]✅ 已更新访问权限[/]")
+                    console.print(f"  [dim]访问范围: {ACCESS_MODE_LABELS[access_mode]}[/]")
+                    console.print(f"  [dim]能力级别: {CAPABILITY_PRESET_LABELS[capability_preset]}[/]")
+                else:
+                    console.print("\n[bold red]❌ 更新失败[/]")
+                pause_enter()
+                continue
+            if op == "2":
                 ok = set_agent_control_plane_whitelist(
                     agent_id=agent_id,
                     enabled=True,
                     capabilities=RECOMMENDED_CONTROL_PLANE_CAPABILITIES,
                 )
-            elif op == "2":
+            elif op == "3":
                 ok = set_agent_control_plane_whitelist(agent_id=agent_id, enabled=False, capabilities=[])
             else:
                 raw = Prompt.ask("[bold]请输入能力列表（逗号分隔）[/]", default="").strip()
@@ -827,7 +931,7 @@ def main_agent_settings_menu():
                 ok = set_agent_control_plane_whitelist(agent_id=agent_id, enabled=bool(caps), capabilities=caps)
 
             if ok:
-                console.print("\n[green]✅ 已更新受限模式白名单[/]")
+                console.print("\n[green]✅ 已更新快捷命令放行[/]")
                 console.print(f"  [dim]变更: Agent {agent_id}[/]")
                 console.print("  [dim]结果: controlPlaneCapabilities 已更新[/]")
                 console.print("  [dim]生效: 下次会话生效（建议重启 agent 会话）[/]")
@@ -852,7 +956,10 @@ def main_agent_settings_menu():
         existing = {}
         existing_settings = _extract_agent_settings(existing) if existing else {
             "workspace_path": "",
-            "workspace_restricted": False,
+            "access_mode": "rw",
+            "capability_preset": "workspace-collab",
+            "access_label": ACCESS_MODE_LABELS["rw"],
+            "capability_label": CAPABILITY_PRESET_LABELS["workspace-collab"],
             "control_caps": [],
             "model_primary": "",
             "model_fallbacks": "",
@@ -868,33 +975,28 @@ def main_agent_settings_menu():
             pause_enter()
             continue
 
-        workspace_restricted = Confirm.ask(
-            "[bold]仅限读写本工作区内容?[/]",
-            default=bool(existing_settings["workspace_restricted"]),
-        )
-        control_caps = existing_settings["control_caps"] if workspace_restricted else []
-        if workspace_restricted:
-            console.print("[dim]控制层白名单默认沿用当前值；可在菜单 4 单独配置[/]")
+        access_mode = _pick_access_mode(existing_settings["access_mode"])
+        capability_preset = _pick_capability_preset(existing_settings["capability_preset"])
+        control_caps = existing_settings["control_caps"]
 
-        ok = upsert_main_agent_config(
+        ok, detail = create_agent_with_official_cli(
             agent_id=agent_id,
             workspace_path=workspace_path,
-            model_primary=existing_settings["model_primary"],
-            model_fallbacks_csv=existing_settings["model_fallbacks"],
-            allow_agents=existing_settings["allow_agents"],
-            sub_model_primary=existing_settings["sub_model_primary"],
-            sub_model_fallbacks_csv=existing_settings["sub_model_fallbacks"],
-            workspace_restricted=workspace_restricted,
+            access_mode=access_mode,
+            capability_preset=capability_preset,
             control_plane_capabilities=control_caps,
         )
         if ok:
             config.reload()
-            console.print(f"\n[green]✅ 已保存 Agent 配置[/]")
+            console.print(f"\n[green]✅ 已完成官方 Agent 创建[/]")
             console.print(f"  [dim]变更: Agent {agent_id}[/]")
             console.print(f"  [dim]结果: workspace -> {workspace_path}[/]")
-            console.print("  [dim]生效: 基础配置即时生效；会话限制建议重启后完整生效[/]")
+            console.print(f"  [dim]访问范围: {ACCESS_MODE_LABELS[access_mode]}[/]")
+            console.print(f"  [dim]能力级别: {CAPABILITY_PRESET_LABELS[capability_preset]}[/]")
+            console.print("  [dim]生效: 创建已走官方 CLI；附加权限配置即时写入[/]")
         else:
-            console.print("\n[bold red]❌ 保存失败[/]")
+            console.print("\n[bold red]❌ 创建失败[/]")
+            console.print(f"  [dim]原因: {detail}[/]")
         pause_enter()
 
 

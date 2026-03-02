@@ -155,14 +155,22 @@ detect_openclaw_config() {
 OPENCLAW_CONFIG_DETECTED="$(detect_openclaw_config)"
 OPENCLAW_BACKUP_DIR_DETECTED="$(dirname "${OPENCLAW_CONFIG_DETECTED}")/backups"
 OPENCLAW_AUTH_PROFILES_DETECTED="$(dirname "${OPENCLAW_CONFIG_DETECTED}")/agents/main/agent/auth-profiles.json"
+OPENCLAW_HOME_DETECTED="$(dirname "${OPENCLAW_CONFIG_DETECTED}")"
+MAIN_AGENT_DIR_DETECTED="${OPENCLAW_HOME_DETECTED}/agents/main/agent"
+MAIN_SESSIONS_DIR_DETECTED="${OPENCLAW_HOME_DETECTED}/agents/main/sessions"
+MAIN_WORKSPACE_DETECTED="${OPENCLAW_HOME_DETECTED}/workspace"
 
 mkdir -p "$(dirname "${OPENCLAW_CONFIG_DETECTED}")"
 mkdir -p "${OPENCLAW_BACKUP_DIR_DETECTED}"
+mkdir -p "${MAIN_AGENT_DIR_DETECTED}" "${MAIN_SESSIONS_DIR_DETECTED}" "${MAIN_WORKSPACE_DETECTED}"
 
 if [[ ! -f "${OPENCLAW_CONFIG_DETECTED}" ]]; then
   warn "未发现 openclaw.json，创建最小骨架: ${OPENCLAW_CONFIG_DETECTED}"
   cat > "${OPENCLAW_CONFIG_DETECTED}" <<'JSON'
 {
+  "gateway": {
+    "mode": "local"
+  },
   "agents": {
     "defaults": {
       "model": {
@@ -174,7 +182,13 @@ if [[ ! -f "${OPENCLAW_CONFIG_DETECTED}" ]]; then
         "maxConcurrent": 8
       }
     },
-    "list": []
+    "list": [
+      {
+        "id": "main",
+        "workspace": "__MAIN_WORKSPACE__",
+        "agentDir": "__MAIN_AGENT_DIR__"
+      }
+    ]
   },
   "auth": {
     "profiles": {}
@@ -184,6 +198,14 @@ if [[ ! -f "${OPENCLAW_CONFIG_DETECTED}" ]]; then
   }
 }
 JSON
+  "${PY_BIN}" - <<PY
+from pathlib import Path
+config_path = Path(r"${OPENCLAW_CONFIG_DETECTED}")
+text = config_path.read_text(encoding="utf-8")
+text = text.replace("__MAIN_WORKSPACE__", r"${MAIN_WORKSPACE_DETECTED}")
+text = text.replace("__MAIN_AGENT_DIR__", r"${MAIN_AGENT_DIR_DETECTED}")
+config_path.write_text(text, encoding="utf-8")
+PY
 fi
 
 cat > "${RUNTIME_ENV_FILE}" <<EOF

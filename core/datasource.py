@@ -6,8 +6,12 @@ from typing import List, Dict
 import os
 
 from . import run_cli
+from .agent_runtime import resolve_agent_runtime_paths
 
-MODELS_JSON_PATH = os.environ.get("OPENCLAW_MODELS_JSON", "/root/.openclaw/agents/main/agent/models.json")
+MODELS_JSON_PATH = os.environ.get(
+    "OPENCLAW_MODELS_JSON",
+    resolve_agent_runtime_paths("main", os.environ.get("OPENCLAW_CONFIG_PATH", "/root/.openclaw/openclaw.json"))["models_json"],
+)
 
 
 

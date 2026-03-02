@@ -8,6 +8,18 @@
   };
 
   const $ = (id) => document.getElementById(id);
+  const ACCESS_OPTIONS = [
+    { value: "none", label: "不访问工作区" },
+    { value: "ro", label: "只读自己的工作区" },
+    { value: "rw", label: "读写自己的工作区" },
+  ];
+  const CAPABILITY_OPTIONS = [
+    { value: "full-access", label: "完全开放" },
+    { value: "readonly-analysis", label: "只读分析" },
+    { value: "safe-exec", label: "安全执行" },
+    { value: "workspace-collab", label: "工作区协作" },
+    { value: "messaging", label: "通讯协调" },
+  ];
 
   function parseTokenFromUrl() {
     const params = new URLSearchParams(window.location.search);
@@ -355,7 +367,7 @@
     rows.forEach((agent) => {
       const tr = document.createElement("tr");
       const modelPolicy = agent.model.overridden ? "独立模型" : "跟随全局";
-      tr.innerHTML = `<td>${agent.id}</td><td>${agent.workspace || "(未绑定)"}</td><td>${agent.security.workspaceOnly ? "仅工作区" : "全部"}</td><td>${modelPolicy}</td>`;
+      tr.innerHTML = `<td>${agent.id}</td><td>${agent.workspace || "(未绑定)"}</td><td>${agent.access.accessLabel}</td><td>${modelPolicy}</td>`;
       agentBody.appendChild(tr);
     });
   }
@@ -368,6 +380,10 @@
     fillSelect($("agentModelId"), agentOpts);
     fillSelect($("agentOpsId"), agentOpts);
     fillSelect($("dispatchAgentId"), agentOpts);
+    fillSelect($("newAgentAccessMode"), ACCESS_OPTIONS);
+    fillSelect($("newAgentCapabilityPreset"), CAPABILITY_OPTIONS);
+    fillSelect($("agentAccessMode"), ACCESS_OPTIONS);
+    fillSelect($("agentCapabilityPreset"), CAPABILITY_OPTIONS);
   }
 
   function syncAgentDrivenForms() {
@@ -381,11 +397,13 @@
     const agentOps = (state.data.agents || []).find((x) => x.id === aidOps);
     if (agentOps) {
       $("bindWorkspaceInput").value = agentOps.workspace || "";
-      $("workspaceOnlySwitch").checked = !!agentOps.security.workspaceOnly;
-      $("controlCapsInput").value = (agentOps.security.controlPlaneCapabilities || []).join(",");
+      $("agentAccessMode").value = agentOps.access.accessMode || "rw";
+      $("agentCapabilityPreset").value = agentOps.access.capabilityPreset || "workspace-collab";
+      $("controlCapsInput").value = (agentOps.access.controlPlaneCapabilities || []).join(",");
     } else {
       $("bindWorkspaceInput").value = "";
-      $("workspaceOnlySwitch").checked = false;
+      $("agentAccessMode").value = "rw";
+      $("agentCapabilityPreset").value = "workspace-collab";
       $("controlCapsInput").value = "";
     }
 
@@ -888,7 +906,8 @@
       body: JSON.stringify({
         agentId: $("newAgentId").value.trim(),
         workspace: $("newAgentWorkspace").value.trim(),
-        workspaceOnly: $("newAgentWorkspaceOnly").checked,
+        accessMode: $("newAgentAccessMode").value,
+        capabilityPreset: $("newAgentCapabilityPreset").value,
       }),
     });
     await refreshState();
@@ -912,11 +931,12 @@
       method: "POST",
       body: JSON.stringify({
         agentId: $("agentOpsId").value,
-        workspaceOnly: $("workspaceOnlySwitch").checked,
+        accessMode: $("agentAccessMode").value,
+        capabilityPreset: $("agentCapabilityPreset").value,
       }),
     });
     await refreshState();
-    showNotice("已更新访问限制");
+    showNotice("已更新访问权限");
   }
 
   async function saveWhitelist(enabled) {

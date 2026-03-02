@@ -5,6 +5,7 @@ import json
 import os
 from datetime import datetime
 from core import run_cli, run_cli_json, config
+from core.agent_runtime import resolve_agent_runtime_paths
 from utils.logger import log
 
 
@@ -33,8 +34,7 @@ def cmd_status(args, env: dict):
 
 def _load_auth_profiles() -> dict:
     """直接读取 auth-profiles.json"""
-    import os
-    auth_path = "/root/.openclaw/agents/main/agent/auth-profiles.json"
+    auth_path = resolve_agent_runtime_paths("main", config.path)["auth_profiles"]
     if not os.path.exists(auth_path):
         return {}
     try:
