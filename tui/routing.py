@@ -25,7 +25,9 @@ from core import (
 )
 from core.agent_runtime import (
     ACCESS_MODE_LABELS,
+    ACCESS_MODE_HELP,
     CAPABILITY_PRESET_LABELS,
+    CAPABILITY_PRESET_HELP,
     apply_agent_access_profile,
     extract_agent_access_profile,
     resolve_agent_runtime_paths,
@@ -178,9 +180,11 @@ def _select_agent_id(ids: List[str], title: str = "请选择 Agent", default_id:
 def _pick_access_mode(default_mode: str = "rw") -> str:
     options = [("1", "none"), ("2", "ro"), ("3", "rw")]
     reverse = {value: key for key, value in options}
-    console.print("\n[bold]访问范围:[/]")
+    console.print("\n[bold]工作区访问:[/]")
+    console.print("[dim]说明：只有在启用 sandbox 时，这里的工作区访问才代表硬隔离。[/]")
     for key, value in options:
         console.print(f"  [cyan]{key}[/] {ACCESS_MODE_LABELS[value]}")
+        console.print(f"      [dim]{ACCESS_MODE_HELP[value]}[/]")
     pick = Prompt.ask("[bold green]>[/]", choices=[x[0] for x in options], default=reverse.get(default_mode, "3"))
     return dict(options).get(pick, "rw")
 
@@ -194,9 +198,11 @@ def _pick_capability_preset(default_preset: str = "workspace-collab") -> str:
         ("5", "messaging"),
     ]
     reverse = {value: key for key, value in options}
-    console.print("\n[bold]能力级别:[/]")
+    console.print("\n[bold]工具能力:[/]")
+    console.print("[dim]说明：完全开放 = 宿主机直连；其余档位默认走 sandbox。[/]")
     for key, value in options:
         console.print(f"  [cyan]{key}[/] {CAPABILITY_PRESET_LABELS[value]}")
+        console.print(f"      [dim]{CAPABILITY_PRESET_HELP[value]}[/]")
     pick = Prompt.ask("[bold green]>[/]", choices=[x[0] for x in options], default=reverse.get(default_preset, "4"))
     return dict(options).get(pick, "workspace-collab")
 
@@ -802,8 +808,8 @@ def main_agent_settings_menu():
             table = Table(box=box.SIMPLE)
             table.add_column("Agent", style="cyan")
             table.add_column("工作区", style="bold")
-            table.add_column("访问范围", style="yellow")
-            table.add_column("能力级别", style="yellow")
+            table.add_column("工作区访问", style="yellow")
+            table.add_column("工具能力", style="yellow")
             table.add_column("模型策略", style="magenta")
             table.add_column("派发", style="green")
             table.add_column("健康", style="white")
@@ -848,7 +854,7 @@ def main_agent_settings_menu():
         console.print("[bold]操作:[/]")
         console.print("  [cyan]1[/] 新增 Agent")
         console.print("  [cyan]2[/] 工作区管理")
-        console.print("  [cyan]3[/] 访问权限与快捷命令放行")
+        console.print("  [cyan]3[/] 运行环境 / 工作区访问 / 快捷命令")
         console.print("  [cyan]0[/] 返回")
         console.print()
         choice = Prompt.ask("[bold green]>[/]", choices=["0", "1", "2", "3"], default="0")
@@ -867,7 +873,7 @@ def main_agent_settings_menu():
                 agent_id = ids[0]
                 console.print(f"\n[dim]已自动选择 Agent: {agent_id}[/]")
             else:
-                agent_id = _select_agent_id(ids, title="请选择要编辑白名单的 Agent", default_id=ids[0])
+                agent_id = _select_agent_id(ids, title="请选择要编辑权限的 Agent", default_id=ids[0])
                 if not agent_id:
                     console.print("\n[yellow]⚠️ 已取消选择[/]")
                     pause_enter()
@@ -882,11 +888,12 @@ def main_agent_settings_menu():
 
             current_caps = settings["control_caps"]
             current_str = ", ".join(current_caps) if current_caps else "(关闭)"
-            console.print(f"\n[dim]当前访问范围: {settings['access_label']}[/]")
-            console.print(f"[dim]当前能力级别: {settings['capability_label']}[/]")
+            console.print(f"\n[dim]当前工作区访问: {settings['access_label']}[/]")
+            console.print(f"[dim]当前工具能力: {settings['capability_label']}[/]")
             console.print(f"[dim]当前快捷命令放行: {current_str}[/]")
+            console.print("[dim]提示：只有在启用 sandbox 时，工作区访问才代表硬隔离。[/]")
             console.print("[bold]操作:[/]")
-            console.print("  [cyan]1[/] 更新访问范围与能力级别")
+            console.print("  [cyan]1[/] 更新工作区访问与工具能力")
             console.print("  [cyan]2[/] 开启推荐快捷命令放行")
             console.print("  [cyan]3[/] 关闭快捷命令放行")
             console.print("  [cyan]4[/] 自定义快捷命令放行")
@@ -911,8 +918,8 @@ def main_agent_settings_menu():
                 )
                 if ok:
                     console.print("\n[green]✅ 已更新访问权限[/]")
-                    console.print(f"  [dim]访问范围: {ACCESS_MODE_LABELS[access_mode]}[/]")
-                    console.print(f"  [dim]能力级别: {CAPABILITY_PRESET_LABELS[capability_preset]}[/]")
+                    console.print(f"  [dim]工作区访问: {ACCESS_MODE_LABELS[access_mode]}[/]")
+                    console.print(f"  [dim]工具能力: {CAPABILITY_PRESET_LABELS[capability_preset]}[/]")
                 else:
                     console.print("\n[bold red]❌ 更新失败[/]")
                 pause_enter()
@@ -991,8 +998,8 @@ def main_agent_settings_menu():
             console.print(f"\n[green]✅ 已完成官方 Agent 创建[/]")
             console.print(f"  [dim]变更: Agent {agent_id}[/]")
             console.print(f"  [dim]结果: workspace -> {workspace_path}[/]")
-            console.print(f"  [dim]访问范围: {ACCESS_MODE_LABELS[access_mode]}[/]")
-            console.print(f"  [dim]能力级别: {CAPABILITY_PRESET_LABELS[capability_preset]}[/]")
+            console.print(f"  [dim]工作区访问: {ACCESS_MODE_LABELS[access_mode]}[/]")
+            console.print(f"  [dim]工具能力: {CAPABILITY_PRESET_LABELS[capability_preset]}[/]")
             console.print("  [dim]生效: 创建已走官方 CLI；附加权限配置即时写入[/]")
         else:
             console.print("\n[bold red]❌ 创建失败[/]")

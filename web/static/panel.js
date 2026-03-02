@@ -9,16 +9,16 @@
 
   const $ = (id) => document.getElementById(id);
   const ACCESS_OPTIONS = [
-    { value: "none", label: "不访问工作区" },
-    { value: "ro", label: "只读自己的工作区" },
-    { value: "rw", label: "读写自己的工作区" },
+    { value: "none", label: "不访问工作区", hint: "不挂载真实 workspace。推荐：纯协调、消息中转、最小数据接触。仅在启用 sandbox 时才是硬隔离。" },
+    { value: "ro", label: "只读自己的工作区", hint: "只读挂载自己的 workspace，不能写入。推荐：代码审查、资料检索、风险分析。仅在启用 sandbox 时才是硬隔离。" },
+    { value: "rw", label: "读写自己的工作区", hint: "读写挂载自己的 workspace。推荐：日常编码、改文档、修配置、多人协作。" },
   ];
   const CAPABILITY_OPTIONS = [
-    { value: "full-access", label: "完全开放" },
-    { value: "readonly-analysis", label: "只读分析" },
-    { value: "safe-exec", label: "安全执行" },
-    { value: "workspace-collab", label: "工作区协作" },
-    { value: "messaging", label: "通讯协调" },
+    { value: "full-access", label: "完全开放", hint: "关闭沙箱限制，工具能力全开。适合主 Agent、高信任维护 Agent、需要跨目录处理事务的场景。" },
+    { value: "readonly-analysis", label: "只读分析", hint: "保留沙箱，只允许读取和分析，禁止写入和执行。适合审查、检索、复盘。" },
+    { value: "safe-exec", label: "安全执行", hint: "保留沙箱，允许执行命令，但不允许写文件。适合环境探测、日志排障、只读诊断。" },
+    { value: "workspace-collab", label: "工作区协作", hint: "保留沙箱，允许读写自己的 workspace。适合编码、改文档、修本 Agent 目录内配置。" },
+    { value: "messaging", label: "通讯协调", hint: "偏消息协调与任务分发，不提供完整编码能力。适合调度、中控、路由类 Agent。" },
   ];
 
   function parseTokenFromUrl() {
@@ -97,6 +97,18 @@
       el.textContent = opt[labelField];
       select.appendChild(el);
     });
+  }
+
+  function optionHint(options, value) {
+    const item = (options || []).find((x) => x.value === value) || options[0] || null;
+    return item ? (item.hint || "") : "";
+  }
+
+  function updateAgentAccessHints() {
+    $("newAgentAccessHint").textContent = optionHint(ACCESS_OPTIONS, $("newAgentAccessMode").value);
+    $("newAgentCapabilityHint").textContent = optionHint(CAPABILITY_OPTIONS, $("newAgentCapabilityPreset").value);
+    $("agentAccessHint").textContent = optionHint(ACCESS_OPTIONS, $("agentAccessMode").value);
+    $("agentCapabilityHint").textContent = optionHint(CAPABILITY_OPTIONS, $("agentCapabilityPreset").value);
   }
 
   function formatBytes(bytes) {
@@ -384,6 +396,7 @@
     fillSelect($("newAgentCapabilityPreset"), CAPABILITY_OPTIONS);
     fillSelect($("agentAccessMode"), ACCESS_OPTIONS);
     fillSelect($("agentCapabilityPreset"), CAPABILITY_OPTIONS);
+    updateAgentAccessHints();
   }
 
   function syncAgentDrivenForms() {
@@ -406,6 +419,7 @@
       $("agentCapabilityPreset").value = "workspace-collab";
       $("controlCapsInput").value = "";
     }
+    updateAgentAccessHints();
 
     const aidDispatch = $("dispatchAgentId").value;
     const agentDispatch = (state.data.agents || []).find((x) => x.id === aidDispatch);
@@ -1150,6 +1164,10 @@
     $("agentModelId").addEventListener("change", syncAgentDrivenForms);
     $("agentOpsId").addEventListener("change", syncAgentDrivenForms);
     $("dispatchAgentId").addEventListener("change", syncAgentDrivenForms);
+    $("newAgentAccessMode").addEventListener("change", updateAgentAccessHints);
+    $("newAgentCapabilityPreset").addEventListener("change", updateAgentAccessHints);
+    $("agentAccessMode").addEventListener("change", updateAgentAccessHints);
+    $("agentCapabilityPreset").addEventListener("change", updateAgentAccessHints);
     $("adapterProvider").addEventListener("change", syncAdapterFields);
     $("officialAuthOption").addEventListener("change", syncOfficialAuthMode);
 

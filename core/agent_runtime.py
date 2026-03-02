@@ -9,12 +9,26 @@ ACCESS_MODE_LABELS: Dict[str, str] = {
     "rw": "读写自己的工作区",
 }
 
+ACCESS_MODE_HELP: Dict[str, str] = {
+    "none": "不挂载真实 workspace。推荐：纯协调、消息中转、最小数据接触场景。仅在启用 sandbox 时才是硬隔离。",
+    "ro": "只读挂载自己的 workspace，不能写入。推荐：代码审查、资料检索、风险分析。仅在启用 sandbox 时才是硬隔离。",
+    "rw": "读写挂载自己的 workspace。推荐：日常编码、改文档、修配置、多人协作。",
+}
+
 CAPABILITY_PRESET_LABELS: Dict[str, str] = {
     "full-access": "完全开放",
     "readonly-analysis": "只读分析",
     "safe-exec": "安全执行",
     "workspace-collab": "工作区协作",
     "messaging": "通讯协调",
+}
+
+CAPABILITY_PRESET_HELP: Dict[str, str] = {
+    "full-access": "关闭沙箱限制，工具能力全开。适合主 Agent、高信任维护 Agent、需要跨目录处理事务的场景。",
+    "readonly-analysis": "保留沙箱，只允许读取和分析，禁止写入和执行。适合审查、检索、复盘。",
+    "safe-exec": "保留沙箱，允许执行命令，但不允许写文件。适合环境探测、日志排障、只读诊断。",
+    "workspace-collab": "保留沙箱，允许读写自己的 workspace。适合编码、改文档、修本 Agent 目录内配置。",
+    "messaging": "偏消息协调与任务分发，不提供完整编码能力。适合调度、中控、路由类 Agent。",
 }
 
 CAPABILITY_PRESETS: Dict[str, Dict[str, Any]] = {
