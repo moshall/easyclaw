@@ -96,6 +96,7 @@ bash install.sh --install-dir /opt/easyclaw --bin-dir /opt/easyclaw/bin
 推荐直接在宿主机执行（目标容器需已启动）：
 
 ```bash
+set -o pipefail
 curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docker.sh | \
   bash -s -- --container easyclaw-web
 ```
@@ -103,13 +104,33 @@ curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docke
 自定义安装目录（传给容器内 `install.sh`）：
 
 ```bash
+set -o pipefail
 curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docker.sh | \
-  bash -s -- --container easyclaw-web --install-dir /opt/easyclaw --bin-dir /usr/local/bin
+  bash -s -- --container easyclaw-web \
+  --install-dir /root/.openclaw/software/easyclaw \
+  --openclaw-home /root/.openclaw \
+  --bin-dir /usr/local/bin
 ```
 
 说明：
 - `install-docker.sh` 会在容器内检查并自动补齐 `bash/curl/tar`（若缺失）。
 - 脚本不会自动安装 OpenClaw CLI；请确保容器内 `openclaw` 可执行，或先自行安装。
+- `--install-dir` / `--openclaw-home` / `--bin-dir` 必须写**容器内路径**，不是宿主机路径。
+- 若不确定路径映射，先查挂载关系：
+
+```bash
+docker inspect easyclaw-web --format '{{range .Mounts}}{{println .Source "=>" .Destination}}{{end}}'
+```
+
+1Panel 常见场景示例（宿主机 `/opt/1panel/apps/openclaw_260205` 挂载到容器 `/root/.openclaw`）：
+
+```bash
+set -o pipefail
+curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docker.sh | \
+  bash -s -- --container openclaw_260205 \
+  --install-dir /root/.openclaw/software/easyclaw \
+  --openclaw-home /root/.openclaw
+```
 
 也可直接在容器内执行在线安装：
 
