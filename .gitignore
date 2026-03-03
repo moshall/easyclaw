@@ -63,3 +63,8 @@ mock_openclaw.py
 # Local docker debug tests (contain environment-specific setup; do not commit)
 tests/test_docker_debug.py
 tests/test_docker_openrouter.py
+
+# Local planning/docs/tests (do not commit)
+/EasyClaw新版Agent创建方案.md
+/test/
+/tests/
