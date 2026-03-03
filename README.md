@@ -6,33 +6,31 @@ EasyClaw 是 OpenClaw 的管理工具，提供：
 
 ## 1. 功能特性
 
-- 模型与供应商管理
-  - 供应商资源库管理
-  - 模型池拉取、筛选、激活
-  - 全局主模型与备用链管理
-  - Agent 级模型覆盖、Spawn 默认模型策略
-- Agent 与工作区管理
-  - Agent 新增与工作区绑定
-  - 运行环境 / 工作区访问 / 工具能力 配置
-  - 控制层快捷命令放行
-- Agent 派发管理
-  - 派发开关
-  - 最大并发
-  - 固定 Agent 白名单
-- 服务配置
-  - 官方搜索服务配置
-  - 扩展搜索源配置（适配层）
-  - 搜索主备切换
-  - 配置备份与回滚
-- 自动化与集成
-  - 网关设置
-  - 系统辅助（如重启、Onboard）
+- 模型与凭据管理
+  - 管理 `models.providers`（OpenAI / Google / Vercel / 自定义 provider）
+  - 拉取模型池、激活/停用模型、维护主备链路
+  - 支持全局模型策略、Agent 覆盖策略、Spawn 默认策略
+  - 记忆检索向量配置统一落位到 `agents.defaults.memorySearch.*`
+- Agent 生命周期与权限管理
+  - 官方 `openclaw agents add` 创建 Agent，保留官方 schema 兼容
+  - 可视化配置 `sandbox + tools`（工作区访问、能力预设）
+  - 细粒度权限策略（目录白名单、fs/exec/deny/elevated）
+  - 控制面命令白名单独立管理（不污染官方字段）
+- 派发与协作
+  - `subagents.allowAgents` 开关、白名单与并发上限
+  - Agent 级工作区绑定和运行路径管理
+  - 支持多 Agent 协作场景的策略化配置
+- 服务与可运维能力
+  - 搜索源配置（官方 + 适配层）与主备切换
+  - 配置备份/回滚、运行状态查看、快速诊断入口
+  - TUI + Web 双入口，适配服务器与桌面环境
 
 ## 2. Quickstart
 
 安装前建议先确认：
 - Python 3.10+（Linux 建议额外安装 `python3-venv`）
 - OpenClaw CLI（`openclaw` 命令可执行）
+- `curl`、`tar`、`bash` 可用（在线安装脚本依赖）
 
 ### 在线一键安装（推荐）
 
@@ -79,10 +77,24 @@ bash install.sh --install-dir /opt/easyclaw --bin-dir /opt/easyclaw/bin
 
 ### Docker 一键安装
 
-在你的容器内执行（示例容器名：`easyclaw-web`）：
+推荐直接在宿主机执行（目标容器需已启动）：
 
 ```bash
-docker exec -it easyclaw-web bash -lc 'cd /easyclaw && bash install.sh'
+curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docker.sh | \
+  bash -s -- --container easyclaw-web
+```
+
+自定义安装目录（传给容器内 `install.sh`）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docker.sh | \
+  bash -s -- --container easyclaw-web --install-dir /opt/easyclaw --bin-dir /usr/local/bin
+```
+
+也可直接在容器内执行在线安装：
+
+```bash
+docker exec -i easyclaw-web bash -lc 'curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-online.sh | bash'
 ```
 
 安装后可直接在容器中运行：
@@ -95,6 +107,20 @@ docker exec -it easyclaw-web bash -lc 'easyclaw web --port 4231'
 Docker 权限建议：
 - EasyClaw 在 Docker 环境会默认禁用 sandbox（避免容器内套 Docker 的常见权限报错）。
 - 若你需要 sandbox 隔离，建议改为宿主机安装 OpenClaw；或自行准备 DooD/DinD 后再手动调整 OpenClaw 原生配置。
+
+### 环境差异与默认处理（实体机 / Docker）
+
+| 项 | 实体机 / VM | Docker 容器 |
+|---|---|---|
+| 运行环境识别 | 非 Docker | 自动识别 Docker |
+| 能力预设 | 支持全部（含 sandbox 预设） | 自动降级到非 sandbox 预设 |
+| `workspace-collab` 等需 sandbox 预设 | 保持原样 | 自动转成 `full-access` |
+| 细粒度权限策略 | 可设置可清空 | 可设置可清空（附加在 `tools/sandbox`） |
+| 推荐隔离方式 | OpenClaw sandbox | 容器挂载边界 + `workspaceOnly` + deny |
+
+提示：
+- Docker 内关闭 sandbox 只是不走官方沙盒，不影响你配置 `tools.fs.workspaceOnly`、`tools.exec.security`、`tools.deny`、`tools.elevated.enabled`。
+- 如果你要做真正硬隔离，建议通过容器挂载设计（每个 agent 独立挂载目录）实现。
 
 ## 3. 运行执行方式
 
