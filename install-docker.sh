@@ -19,6 +19,8 @@ Required:
 Bootstrap options:
   --repo <owner/name>    GitHub repo slug (default: moshall/easyclaw)
   --ref <git-ref>        Branch/tag/commit (default: main)
+  --auto-deps            Auto-install missing deps in container (default)
+  --no-auto-deps         Disable auto dependency installation
   --dry-run              Print resolved command and exit
   -h, --help             Show this help
 
@@ -31,6 +33,7 @@ EOF
 CONTAINER_NAME=""
 REPO_SLUG="${EASYCLAW_REPO_SLUG:-moshall/easyclaw}"
 REF="${EASYCLAW_REF:-main}"
+AUTO_DEPS="${EASYCLAW_AUTO_DEPS:-1}"
 DRY_RUN="0"
 FORWARD_ARGS=()
 
@@ -53,6 +56,16 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN="1"
+      shift
+      ;;
+    --auto-deps)
+      AUTO_DEPS="1"
+      FORWARD_ARGS+=("--auto-deps")
+      shift
+      ;;
+    --no-auto-deps)
+      AUTO_DEPS="0"
+      FORWARD_ARGS+=("--no-auto-deps")
       shift
       ;;
     -h|--help)
@@ -88,6 +101,60 @@ if [[ "${running_state}" != "true" ]]; then
   exit 1
 fi
 
+container_has_command() {
+  local cmd="$1"
+  docker exec -i "${CONTAINER_NAME}" sh -lc "command -v ${cmd} >/dev/null 2>&1"
+}
+
+ensure_container_bootstrap_deps() {
+  local missing=()
+  local cmd
+  for cmd in bash curl tar; do
+    if ! container_has_command "${cmd}"; then
+      missing+=("${cmd}")
+    fi
+  done
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  if [[ "${AUTO_DEPS}" != "1" ]]; then
+    echo "[ERROR] missing deps in container: ${missing[*]} (use --auto-deps or install manually)" >&2
+    return 1
+  fi
+
+  echo "[INFO] Missing deps in container, trying auto install: ${missing[*]}"
+  if ! docker exec -i "${CONTAINER_NAME}" sh -lc '
+set -e
+if command -v apt-get >/dev/null 2>&1; then
+  apt-get update -y >/dev/null
+  apt-get install -y bash curl tar >/dev/null
+elif command -v dnf >/dev/null 2>&1; then
+  dnf install -y bash curl tar >/dev/null
+elif command -v yum >/dev/null 2>&1; then
+  yum install -y bash curl tar >/dev/null
+elif command -v apk >/dev/null 2>&1; then
+  apk add --no-cache bash curl tar >/dev/null
+elif command -v pacman >/dev/null 2>&1; then
+  pacman -Sy --noconfirm bash curl tar >/dev/null
+elif command -v zypper >/dev/null 2>&1; then
+  zypper --non-interactive install bash curl tar >/dev/null
+else
+  exit 91
+fi
+'; then
+    echo "[ERROR] failed to auto-install deps in container" >&2
+    return 1
+  fi
+
+  for cmd in bash curl tar; do
+    if ! container_has_command "${cmd}"; then
+      echo "[ERROR] dependency still missing after install: ${cmd}" >&2
+      return 1
+    fi
+  done
+}
+
 INSTALL_ONLINE_URL="https://raw.githubusercontent.com/${REPO_SLUG}/${REF}/install-online.sh"
 remote_cmd="curl -fsSL $(printf '%q' "${INSTALL_ONLINE_URL}") | bash -s --"
 if [[ ${#FORWARD_ARGS[@]} -gt 0 ]]; then
@@ -99,9 +166,12 @@ fi
 if [[ "${DRY_RUN}" == "1" ]]; then
   echo "CONTAINER=${CONTAINER_NAME}"
   echo "INSTALL_ONLINE_URL=${INSTALL_ONLINE_URL}"
+  echo "AUTO_DEPS=${AUTO_DEPS}"
   echo "REMOTE_CMD=${remote_cmd}"
   exit 0
 fi
+
+ensure_container_bootstrap_deps
 
 echo "[INFO] Installing EasyClaw in container: ${CONTAINER_NAME}"
 docker exec -i "${CONTAINER_NAME}" bash -lc "${remote_cmd}"

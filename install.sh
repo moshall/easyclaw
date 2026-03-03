@@ -30,6 +30,8 @@ Options:
   --openclaw-home <path>  Set OpenClaw home directory
   --target-user <name>    Install for specific user
   --target-home <path>    Home directory for target user
+  --auto-deps             Auto-install system dependencies when missing (default)
+  --no-auto-deps          Disable auto dependency installation
   --skip-pip              Skip pip dependency installation
   --print-config          Print resolved install config and exit
   -h, --help              Show this help
@@ -42,6 +44,7 @@ CLI_OPENCLAW_HOME=""
 CLI_TARGET_USER=""
 CLI_TARGET_HOME=""
 CLI_SKIP_PIP="0"
+CLI_AUTO_DEPS="1"
 PRINT_CONFIG_ONLY="0"
 
 while [[ $# -gt 0 ]]; do
@@ -75,6 +78,14 @@ while [[ $# -gt 0 ]]; do
       CLI_SKIP_PIP="1"
       shift
       ;;
+    --auto-deps)
+      CLI_AUTO_DEPS="1"
+      shift
+      ;;
+    --no-auto-deps)
+      CLI_AUTO_DEPS="0"
+      shift
+      ;;
     --print-config)
       PRINT_CONFIG_ONLY="1"
       shift
@@ -97,6 +108,7 @@ done
 [[ -n "${CLI_TARGET_USER}" ]] && EASYCLAW_TARGET_USER="${CLI_TARGET_USER}"
 [[ -n "${CLI_TARGET_HOME}" ]] && EASYCLAW_TARGET_HOME="${CLI_TARGET_HOME}"
 [[ "${CLI_SKIP_PIP}" == "1" ]] && EASYCLAW_SKIP_PIP="1"
+EASYCLAW_AUTO_DEPS="${CLI_AUTO_DEPS}"
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 is_docker="no"
@@ -106,10 +118,148 @@ fi
 
 os_name="$(uname -s || true)"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  err "未找到 python3，请先安装 Python 3.10+"
-  exit 1
-fi
+detect_package_manager() {
+  local managers=(apt-get dnf yum apk pacman zypper brew)
+  local manager
+  for manager in "${managers[@]}"; do
+    if command -v "${manager}" >/dev/null 2>&1; then
+      echo "${manager}"
+      return 0
+    fi
+  done
+  echo ""
+}
+
+run_package_install() {
+  local manager="$1"
+  shift
+  local packages=("$@")
+  if [[ ${#packages[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  local prefix=()
+  if [[ "${EUID}" -ne 0 ]]; then
+    if command -v sudo >/dev/null 2>&1; then
+      prefix=(sudo)
+    else
+      err "缺少 sudo，无法自动安装依赖: ${packages[*]}"
+      return 1
+    fi
+  fi
+
+  case "${manager}" in
+    apt-get)
+      "${prefix[@]}" apt-get update -y >/dev/null
+      "${prefix[@]}" apt-get install -y "${packages[@]}" >/dev/null
+      ;;
+    dnf)
+      "${prefix[@]}" dnf install -y "${packages[@]}" >/dev/null
+      ;;
+    yum)
+      "${prefix[@]}" yum install -y "${packages[@]}" >/dev/null
+      ;;
+    apk)
+      "${prefix[@]}" apk add --no-cache "${packages[@]}" >/dev/null
+      ;;
+    pacman)
+      "${prefix[@]}" pacman -Sy --noconfirm "${packages[@]}" >/dev/null
+      ;;
+    zypper)
+      "${prefix[@]}" zypper --non-interactive install "${packages[@]}" >/dev/null
+      ;;
+    brew)
+      brew install "${packages[@]}" >/dev/null
+      ;;
+    *)
+      err "不支持的包管理器: ${manager}"
+      return 1
+      ;;
+  esac
+}
+
+python3_has_venv() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 1
+  fi
+  python3 -c "import venv" >/dev/null 2>&1
+}
+
+ensure_python_runtime() {
+  local missing_python="0"
+  local missing_venv="0"
+  local want_auto="${EASYCLAW_AUTO_DEPS:-1}"
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    missing_python="1"
+  fi
+  if ! python3_has_venv; then
+    missing_venv="1"
+  fi
+  if [[ "${missing_python}" == "0" && "${missing_venv}" == "0" ]]; then
+    return 0
+  fi
+
+  if [[ "${want_auto}" != "1" ]]; then
+    if [[ "${missing_python}" == "1" ]]; then
+      err "未找到 python3，请先安装 Python 3.10+"
+    else
+      err "检测到 python3 缺少 venv 模块，请先安装 python3-venv"
+    fi
+    return 1
+  fi
+
+  local manager
+  manager="$(detect_package_manager)"
+  if [[ -z "${manager}" ]]; then
+    err "无法识别包管理器，无法自动安装依赖。请先安装 python3 与 python3-venv。"
+    return 1
+  fi
+
+  local packages=()
+  case "${manager}" in
+    apt-get)
+      [[ "${missing_python}" == "1" ]] && packages+=("python3")
+      [[ "${missing_venv}" == "1" ]] && packages+=("python3-venv")
+      ;;
+    dnf|yum)
+      [[ "${missing_python}" == "1" || "${missing_venv}" == "1" ]] && packages+=("python3")
+      ;;
+    apk)
+      [[ "${missing_python}" == "1" || "${missing_venv}" == "1" ]] && packages+=("python3" "py3-pip")
+      ;;
+    pacman)
+      [[ "${missing_python}" == "1" || "${missing_venv}" == "1" ]] && packages+=("python")
+      ;;
+    zypper)
+      [[ "${missing_python}" == "1" || "${missing_venv}" == "1" ]] && packages+=("python3")
+      ;;
+    brew)
+      [[ "${missing_python}" == "1" || "${missing_venv}" == "1" ]] && packages+=("python")
+      ;;
+  esac
+
+  if [[ ${#packages[@]} -eq 0 ]]; then
+    err "无法计算可安装的 python 依赖包，请手动安装 python3 与 python3-venv。"
+    return 1
+  fi
+
+  info "检测到缺失依赖，尝试自动安装: ${packages[*]}"
+  if ! run_package_install "${manager}" "${packages[@]}"; then
+    err "自动安装依赖失败，请手动安装后重试。"
+    return 1
+  fi
+  ok "系统依赖安装完成: ${packages[*]}"
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    err "自动安装后仍未找到 python3，请手动检查。"
+    return 1
+  fi
+  if ! python3_has_venv; then
+    err "自动安装后 python3 仍缺少 venv 模块，请手动安装 python3-venv。"
+    return 1
+  fi
+}
 
 if ! command -v openclaw >/dev/null 2>&1; then
   warn "未检测到 openclaw CLI，EasyClaw 的官方能力将不可用。"
@@ -177,9 +327,12 @@ INSTALL_DIR=${INSTALL_DIR}
 BIN_DIR=${BIN_DIR}
 RUNTIME_ENV_FILE=${RUNTIME_ENV_FILE}
 EASYCLAW_SKIP_PIP=${EASYCLAW_SKIP_PIP:-0}
+EASYCLAW_AUTO_DEPS=${EASYCLAW_AUTO_DEPS:-1}
 EOF
   exit 0
 fi
+
+ensure_python_runtime
 
 mkdir -p "${INSTALL_DIR}"
 mkdir -p "${OPENCLAW_HOME}"

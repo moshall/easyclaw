@@ -15,6 +15,8 @@ Usage:
 Bootstrap options:
   --repo <owner/name>   GitHub repo slug (default: moshall/easyclaw)
   --ref <git-ref>       Branch/tag/commit (default: main)
+  --auto-deps           Auto-install missing system dependencies (default)
+  --no-auto-deps        Disable auto dependency installation
   --keep-temp           Keep temp source directory after install
   --dry-run             Print resolved archive URL and forwarded args, then exit
   -h, --help            Show this help
@@ -27,6 +29,7 @@ EOF
 
 REPO_SLUG="${EASYCLAW_REPO_SLUG:-moshall/easyclaw}"
 REF="${EASYCLAW_REF:-main}"
+AUTO_DEPS="${EASYCLAW_AUTO_DEPS:-1}"
 KEEP_TEMP="0"
 DRY_RUN="0"
 FORWARD_ARGS=()
@@ -47,6 +50,16 @@ while [[ $# -gt 0 ]]; do
       KEEP_TEMP="1"
       shift
       ;;
+    --auto-deps)
+      AUTO_DEPS="1"
+      FORWARD_ARGS+=("--auto-deps")
+      shift
+      ;;
+    --no-auto-deps)
+      AUTO_DEPS="0"
+      FORWARD_ARGS+=("--no-auto-deps")
+      shift
+      ;;
     --dry-run)
       DRY_RUN="1"
       shift
@@ -64,6 +77,94 @@ done
 
 ARCHIVE_URL="${EASYCLAW_ARCHIVE_URL:-https://codeload.github.com/${REPO_SLUG}/tar.gz/${REF}}"
 
+detect_package_manager() {
+  local managers=(apt-get dnf yum apk pacman zypper brew)
+  local manager
+  for manager in "${managers[@]}"; do
+    if command -v "${manager}" >/dev/null 2>&1; then
+      echo "${manager}"
+      return 0
+    fi
+  done
+  echo ""
+}
+
+run_package_install() {
+  local manager="$1"
+  shift
+  local packages=("$@")
+  if [[ ${#packages[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  local prefix=()
+  if [[ "${EUID}" -ne 0 ]]; then
+    if command -v sudo >/dev/null 2>&1; then
+      prefix=(sudo)
+    else
+      echo "[ERROR] missing sudo, cannot auto-install: ${packages[*]}" >&2
+      return 1
+    fi
+  fi
+
+  case "${manager}" in
+    apt-get)
+      "${prefix[@]}" apt-get update -y >/dev/null
+      "${prefix[@]}" apt-get install -y "${packages[@]}" >/dev/null
+      ;;
+    dnf)
+      "${prefix[@]}" dnf install -y "${packages[@]}" >/dev/null
+      ;;
+    yum)
+      "${prefix[@]}" yum install -y "${packages[@]}" >/dev/null
+      ;;
+    apk)
+      "${prefix[@]}" apk add --no-cache "${packages[@]}" >/dev/null
+      ;;
+    pacman)
+      "${prefix[@]}" pacman -Sy --noconfirm "${packages[@]}" >/dev/null
+      ;;
+    zypper)
+      "${prefix[@]}" zypper --non-interactive install "${packages[@]}" >/dev/null
+      ;;
+    brew)
+      brew install "${packages[@]}" >/dev/null
+      ;;
+    *)
+      echo "[ERROR] unsupported package manager: ${manager}" >&2
+      return 1
+      ;;
+  esac
+}
+
+ensure_command() {
+  local cmd="$1"
+  shift
+  local package_candidates=("$@")
+  if command -v "${cmd}" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ "${AUTO_DEPS}" != "1" ]]; then
+    echo "[ERROR] ${cmd} not found. Please install it first." >&2
+    return 1
+  fi
+  local manager
+  manager="$(detect_package_manager)"
+  if [[ -z "${manager}" ]]; then
+    echo "[ERROR] ${cmd} missing and no supported package manager found." >&2
+    return 1
+  fi
+  echo "[INFO] Missing ${cmd}. Trying auto install via ${manager}: ${package_candidates[*]}"
+  if ! run_package_install "${manager}" "${package_candidates[@]}"; then
+    echo "[ERROR] Failed to install dependency: ${cmd}" >&2
+    return 1
+  fi
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    echo "[ERROR] ${cmd} still missing after auto install." >&2
+    return 1
+  fi
+}
+
 if [[ "${DRY_RUN}" == "1" ]]; then
   echo "ARCHIVE_URL=${ARCHIVE_URL}"
   if [[ ${#FORWARD_ARGS[@]} -gt 0 ]]; then
@@ -74,15 +175,8 @@ if [[ "${DRY_RUN}" == "1" ]]; then
   exit 0
 fi
 
-if ! command -v curl >/dev/null 2>&1; then
-  echo "[ERROR] curl not found. Please install curl first." >&2
-  exit 1
-fi
-
-if ! command -v tar >/dev/null 2>&1; then
-  echo "[ERROR] tar not found. Please install tar first." >&2
-  exit 1
-fi
+ensure_command curl curl
+ensure_command tar tar
 
 tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t easyclaw-install)"
 cleanup() {

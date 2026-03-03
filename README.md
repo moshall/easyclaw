@@ -31,6 +31,7 @@ EasyClaw 是 OpenClaw 的管理工具，提供：
 - Python 3.10+（Linux 建议额外安装 `python3-venv`）
 - OpenClaw CLI（`openclaw` 命令可执行）
 - `curl`、`tar`、`bash` 可用（在线安装脚本依赖）
+- 一键脚本会尝试自动安装缺失系统依赖（不含 OpenClaw CLI），如需关闭可加 `--no-auto-deps`
 
 ### 在线一键安装（推荐）
 
@@ -48,6 +49,12 @@ curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-onlin
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-online.sh | bash -s -- --install-dir /opt/easyclaw --bin-dir /opt/easyclaw/bin
+```
+
+关闭自动依赖安装（仅检查，不自动装）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-online.sh | bash -s -- --no-auto-deps
 ```
 
 ### 本地源码安装（macOS / Linux）
@@ -90,6 +97,10 @@ curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docke
 curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docker.sh | \
   bash -s -- --container easyclaw-web --install-dir /opt/easyclaw --bin-dir /usr/local/bin
 ```
+
+说明：
+- `install-docker.sh` 会在容器内检查并自动补齐 `bash/curl/tar`（若缺失）。
+- 脚本不会自动安装 OpenClaw CLI；请确保容器内 `openclaw` 可执行，或先自行安装。
 
 也可直接在容器内执行在线安装：
 
