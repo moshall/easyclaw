@@ -49,7 +49,7 @@ ClawPanel 是 OpenClaw 的管理工具，提供：
 全局安装（推荐）：
 
 ```bash
-npm install -g @moshall/clawpanel
+npm install -g @milkkey/clawpanel
 ```
 
 安装后可直接使用：
@@ -68,7 +68,7 @@ clawpanel web --port 4231
 CLAWPANEL_INSTALL_DIR=/opt/clawpanel \
 CLAWPANEL_BIN_DIR=/usr/local/bin \
 CLAWPANEL_OPENCLAW_HOME=/root/.openclaw \
-npm install -g @moshall/clawpanel
+npm install -g @milkkey/clawpanel
 ```
 
 ### 在线一键安装（推荐）
