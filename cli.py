@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-EasyClaw - OpenClaw 管理 CLI 工具
+ClawPanel - OpenClaw 管理 CLI 工具
 基于 Rich 库的现代化终端界面
 """
 import argparse
@@ -53,7 +53,7 @@ def _build_main_layout() -> Layout:
 
     header = Panel(
         Text.assemble(
-            ("EasyClaw", "bold cyan"),
+            ("ClawPanel", "bold cyan"),
             ("  ", ""),
             ("OpenClaw 管理面板", "dim"),
             ("   ", ""),
@@ -147,7 +147,7 @@ def show_status():
 
 # ========== 入口 ==========
 def main():
-    parser = argparse.ArgumentParser(prog="easyclaw", description="EasyClaw - OpenClaw 管理工具")
+    parser = argparse.ArgumentParser(prog="clawpanel", description="ClawPanel - OpenClaw 管理工具")
     parser.add_argument("command", nargs="?", help="命令")
     args = parser.parse_args()
     

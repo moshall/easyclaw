@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# EasyClaw Docker bootstrap installer
+# ClawPanel Docker bootstrap installer
 # Example:
 #   curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docker.sh | \
-#     bash -s -- --container easyclaw-web --install-dir /opt/easyclaw --bin-dir /usr/local/bin
+#     bash -s -- --container clawpanel-web --install-dir /opt/clawpanel --bin-dir /usr/local/bin
 
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-EasyClaw Docker installer
+ClawPanel Docker installer
 
 Usage:
   bash install-docker.sh --container <name> [bootstrap-options] [install-options...]
@@ -26,7 +26,7 @@ Bootstrap options:
 
 Install options:
   Any other options are forwarded to install-online.sh inside container
-  e.g. --install-dir /opt/easyclaw --bin-dir /usr/local/bin
+  e.g. --install-dir /opt/clawpanel --bin-dir /usr/local/bin
 EOF
 }
 
@@ -173,6 +173,6 @@ fi
 
 ensure_container_bootstrap_deps
 
-echo "[INFO] Installing EasyClaw in container: ${CONTAINER_NAME}"
+echo "[INFO] Installing ClawPanel in container: ${CONTAINER_NAME}"
 docker exec -i "${CONTAINER_NAME}" bash -lc "${remote_cmd}"
-echo "[OK] EasyClaw installation finished in container ${CONTAINER_NAME}."
+echo "[OK] ClawPanel installation finished in container ${CONTAINER_NAME}."

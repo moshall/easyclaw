@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# EasyClaw online bootstrap installer
+# ClawPanel online bootstrap installer
 # Example:
-#   curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-online.sh | bash -s -- --install-dir /opt/easyclaw
+#   curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-online.sh | bash -s -- --install-dir /opt/clawpanel
 
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-EasyClaw online installer
+ClawPanel online installer
 
 Usage:
   bash install-online.sh [bootstrap-options] [install-options...]
@@ -23,7 +23,7 @@ Bootstrap options:
 
 Install options:
   Any other options are forwarded to install.sh
-  e.g. --install-dir /data/easyclaw --bin-dir /usr/local/bin
+  e.g. --install-dir /data/clawpanel --bin-dir /usr/local/bin
 EOF
 }
 
@@ -178,7 +178,7 @@ fi
 ensure_command curl curl
 ensure_command tar tar
 
-tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t easyclaw-install)"
+tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t clawpanel-install)"
 cleanup() {
   if [[ "${KEEP_TEMP}" != "1" && -n "${tmp_dir}" && -d "${tmp_dir}" ]]; then
     rm -rf "${tmp_dir}"
@@ -197,4 +197,4 @@ fi
 
 echo "[INFO] Running installer: ${install_script}"
 bash "${install_script}" "${FORWARD_ARGS[@]}"
-echo "[OK] EasyClaw installation finished."
+echo "[OK] ClawPanel installation finished."

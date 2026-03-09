@@ -80,7 +80,7 @@ from tui.tools import (
 )
 
 
-app = FastAPI(title="EasyClaw Web Panel")
+app = FastAPI(title="ClawPanel Web Panel")
 
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -136,6 +136,7 @@ def _list_config_backups(limit: int = 20) -> List[Dict[str, Any]]:
     seen: Dict[str, bool] = {}
     paths: List[str] = []
     patterns = [
+        os.path.join(DEFAULT_BACKUP_DIR, "clawpanel_*.json.bak"),
         os.path.join(DEFAULT_BACKUP_DIR, "easyclaw_*.json.bak"),
         os.path.join(DEFAULT_BACKUP_DIR, "openclaw_bkp_*.json"),
         os.path.join(DEFAULT_BACKUP_DIR, "*.json.bak"),

@@ -1,8 +1,10 @@
-# EasyClaw
+# ClawPanel
 
-EasyClaw 是 OpenClaw 的管理工具，提供：
+ClawPanel 是 OpenClaw 的管理工具，提供：
 - TUI 管理台（终端交互）
 - Web UI（浏览器可视化管理）
+
+说明：当前仓库地址仍为 `moshall/easyclaw`，安装脚本 URL 暂不变；运行命令已统一为 `clawpanel` / `clawtui`。
 
 ## 1. 功能特性
 
@@ -51,13 +53,13 @@ curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-onlin
 自定义安装目录（便于脚本化调用）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-online.sh | bash -s -- --install-dir /opt/easyclaw
+curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-online.sh | bash -s -- --install-dir /opt/clawpanel
 ```
 
 也可同时指定命令目录：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-online.sh | bash -s -- --install-dir /opt/easyclaw --bin-dir /opt/easyclaw/bin
+curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-online.sh | bash -s -- --install-dir /opt/clawpanel --bin-dir /opt/clawpanel/bin
 ```
 
 关闭自动依赖安装（仅检查，不自动装）：
@@ -74,7 +76,11 @@ bash install.sh
 ```
 
 默认安装到：
-- `~/.openclaw/easyclaw`
+- `~/.openclaw/clawpanel`
+
+兼容说明：
+- 若历史目录 `~/.openclaw/easyclaw` 已存在，安装脚本会优先复用该目录（避免覆盖迁移风险）。
+- 新命令为 `clawpanel` / `clawtui`，同时保留 `easyclaw` / `easytui` 兼容别名。
 
 说明：
 - 安装脚本会自动探测 `openclaw` 可执行路径（如 `/usr/bin/openclaw` 或 `/usr/local/bin/openclaw`）并写入运行环境。
@@ -88,7 +94,7 @@ sudo bash install.sh
 CLI 方式自定义目录（适合其他工具调用）：
 
 ```bash
-bash install.sh --install-dir /opt/easyclaw --bin-dir /opt/easyclaw/bin
+bash install.sh --install-dir /opt/clawpanel --bin-dir /opt/clawpanel/bin
 ```
 
 ### Docker 一键安装
@@ -98,7 +104,7 @@ bash install.sh --install-dir /opt/easyclaw --bin-dir /opt/easyclaw/bin
 ```bash
 set -o pipefail
 curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docker.sh | \
-  bash -s -- --container easyclaw-web
+  bash -s -- --container clawpanel-web
 ```
 
 自定义安装目录（传给容器内 `install.sh`）：
@@ -106,8 +112,8 @@ curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docke
 ```bash
 set -o pipefail
 curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docker.sh | \
-  bash -s -- --container easyclaw-web \
-  --install-dir /root/.openclaw/software/easyclaw \
+  bash -s -- --container clawpanel-web \
+  --install-dir /root/.openclaw/software/clawpanel \
   --openclaw-home /root/.openclaw \
   --bin-dir /usr/local/bin
 ```
@@ -119,7 +125,7 @@ curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docke
 - 若不确定路径映射，先查挂载关系：
 
 ```bash
-docker inspect easyclaw-web --format '{{range .Mounts}}{{println .Source "=>" .Destination}}{{end}}'
+docker inspect clawpanel-web --format '{{range .Mounts}}{{println .Source "=>" .Destination}}{{end}}'
 ```
 
 1Panel 常见场景示例（宿主机 `/opt/1panel/apps/openclaw_260205` 挂载到容器 `/root/.openclaw`）：
@@ -128,25 +134,25 @@ docker inspect easyclaw-web --format '{{range .Mounts}}{{println .Source "=>" .D
 set -o pipefail
 curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-docker.sh | \
   bash -s -- --container openclaw_260205 \
-  --install-dir /root/.openclaw/software/easyclaw \
+  --install-dir /root/.openclaw/software/clawpanel \
   --openclaw-home /root/.openclaw
 ```
 
 也可直接在容器内执行在线安装：
 
 ```bash
-docker exec -i easyclaw-web bash -lc 'curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-online.sh | bash'
+docker exec -i clawpanel-web bash -lc 'curl -fsSL https://raw.githubusercontent.com/moshall/easyclaw/main/install-online.sh | bash'
 ```
 
 安装后可直接在容器中运行：
 
 ```bash
-docker exec -it easyclaw-web bash -lc 'easyclaw tui'
-docker exec -it easyclaw-web bash -lc 'easyclaw web --port 4231'
+docker exec -it clawpanel-web bash -lc 'clawpanel tui'
+docker exec -it clawpanel-web bash -lc 'clawpanel web --port 4231'
 ```
 
 Docker 权限建议：
-- EasyClaw 在 Docker 环境会默认禁用 sandbox（避免容器内套 Docker 的常见权限报错）。
+- ClawPanel 在 Docker 环境会默认禁用 sandbox（避免容器内套 Docker 的常见权限报错）。
 - 若你需要 sandbox 隔离，建议改为宿主机安装 OpenClaw；或自行准备 DooD/DinD 后再手动调整 OpenClaw 原生配置。
 
 ### 环境差异与默认处理（实体机 / Docker）
@@ -168,7 +174,7 @@ Docker 权限建议：
 ### 3.1 TUI 执行
 
 ```bash
-easyclaw tui
+clawpanel tui
 ```
 
 特点：
@@ -181,7 +187,7 @@ easyclaw tui
 启动：
 
 ```bash
-easyclaw web --port 4231
+clawpanel web --port 4231
 ```
 
 浏览器访问：
@@ -191,7 +197,7 @@ easyclaw web --port 4231
 
 ### 3.3 Agent 运行环境与权限怎么理解
 
-EasyClaw 把 OpenClaw 官方的 `sandbox + tools` 映射成更直观的 2 层：
+ClawPanel 把 OpenClaw 官方的 `sandbox + tools` 映射成更直观的 2 层：
 
 - 工作区访问
   - `不访问工作区`
@@ -225,20 +231,20 @@ EasyClaw 把 OpenClaw 官方的 `sandbox + tools` 映射成更直观的 2 层：
   - `tools.exec.security`
   - `tools.deny`
   - `tools.elevated.enabled`
-- 细粒度权限元数据保存到 `~/.openclaw/easyclaw/agent_meta.json`（不会污染 OpenClaw 官方 schema）
+- 细粒度权限元数据默认保存到 `~/.openclaw/clawpanel/agent_meta.json`（兼容读取旧路径 `~/.openclaw/easyclaw/agent_meta.json`，且不会污染 OpenClaw 官方 schema）
 
 ## 4. 常见问题
 
 ### Q1: Web UI 打不开？
 
 A: 依次检查：
-- 进程是否已启动（`easyclaw web --port 4231`）
+- 进程是否已启动（`clawpanel web --port 4231`）
 - 端口是否被占用（改用其他端口）
 - 若在 Docker 内运行，是否做了端口映射
 
 ### Q2: 提示 `openclaw` 不存在？
 
-A: EasyClaw 可启动，但官方能力依赖 OpenClaw CLI。请先在当前环境安装并确保 `openclaw` 可执行。
+A: ClawPanel 可启动，但官方能力依赖 OpenClaw CLI。请先在当前环境安装并确保 `openclaw` 可执行。
 
 ### Q3: 配置改坏了怎么恢复？
 

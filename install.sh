@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# EasyClaw one-click installer (TUI + Web)
-# - Installs current project to $HOME/.openclaw/easyclaw (default)
-# - Creates command wrappers: easyclaw, easytui
+# ClawPanel one-click installer (TUI + Web)
+# - Installs current project to $HOME/.openclaw/clawpanel (default)
+# - Creates command wrappers: clawpanel, clawtui (with easyclaw/easytui compatibility aliases)
 # - Auto-detects OpenClaw config path and exports runtime env
 
 set -euo pipefail
@@ -19,14 +19,14 @@ err() { echo -e "${RED}[ERROR]${NC} $*"; }
 
 usage() {
   cat <<'EOF'
-EasyClaw installer
+ClawPanel installer
 
 Usage:
   bash install.sh [options]
 
 Options:
-  --install-dir <path>    Install EasyClaw into target directory
-  --bin-dir <path>        Install wrappers (easyclaw/easytui) into directory
+  --install-dir <path>    Install ClawPanel into target directory
+  --bin-dir <path>        Install wrappers (clawpanel/clawtui + compatibility aliases) into directory
   --openclaw-home <path>  Set OpenClaw home directory
   --target-user <name>    Install for specific user
   --target-home <path>    Home directory for target user
@@ -262,7 +262,7 @@ ensure_python_runtime() {
 }
 
 if ! command -v openclaw >/dev/null 2>&1; then
-  warn "未检测到 openclaw CLI，EasyClaw 的官方能力将不可用。"
+  warn "未检测到 openclaw CLI，ClawPanel 的官方能力将不可用。"
 fi
 
 resolve_target_user() {
@@ -301,7 +301,17 @@ TARGET_HOME="$(resolve_target_home "${TARGET_USER}")"
 TARGET_GROUP="$(id -gn "${TARGET_USER}" 2>/dev/null || echo "${TARGET_USER}")"
 
 OPENCLAW_HOME="${OPENCLAW_HOME:-${TARGET_HOME}/.openclaw}"
-INSTALL_DIR="${EASYCLAW_INSTALL_DIR:-${OPENCLAW_HOME}/easyclaw}"
+DEFAULT_INSTALL_DIR="${OPENCLAW_HOME}/clawpanel"
+LEGACY_INSTALL_DIR="${OPENCLAW_HOME}/easyclaw"
+if [[ -n "${EASYCLAW_INSTALL_DIR:-}" ]]; then
+  INSTALL_DIR="${EASYCLAW_INSTALL_DIR}"
+elif [[ -d "${DEFAULT_INSTALL_DIR}" ]]; then
+  INSTALL_DIR="${DEFAULT_INSTALL_DIR}"
+elif [[ -d "${LEGACY_INSTALL_DIR}" ]]; then
+  INSTALL_DIR="${LEGACY_INSTALL_DIR}"
+else
+  INSTALL_DIR="${DEFAULT_INSTALL_DIR}"
+fi
 RUNTIME_ENV_FILE="${INSTALL_DIR}/.env.runtime"
 
 if [[ -n "${EASYCLAW_BIN_DIR:-}" ]]; then
@@ -469,23 +479,38 @@ EASYCLAW_SANDBOX=0
 EOF
 ok "运行时配置已写入 ${RUNTIME_ENV_FILE}"
 
+cat > "${BIN_DIR}/clawpanel" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+CLAWPANEL_DIR="${INSTALL_DIR}"
+if [[ -f "\${CLAWPANEL_DIR}/.env.runtime" ]]; then
+  set -a
+  source "\${CLAWPANEL_DIR}/.env.runtime"
+  set +a
+fi
+exec "\${CLAWPANEL_DIR}/.venv/bin/python3" "\${CLAWPANEL_DIR}/easyclaw.py" "\$@"
+EOF
+chmod +x "${BIN_DIR}/clawpanel"
+
+cat > "${BIN_DIR}/clawtui" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec "${BIN_DIR}/clawpanel" tui "\$@"
+EOF
+chmod +x "${BIN_DIR}/clawtui"
+
+# Compatibility aliases for existing users/tools.
 cat > "${BIN_DIR}/easyclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-EASYCLAW_DIR="${INSTALL_DIR}"
-if [[ -f "\${EASYCLAW_DIR}/.env.runtime" ]]; then
-  set -a
-  source "\${EASYCLAW_DIR}/.env.runtime"
-  set +a
-fi
-exec "\${EASYCLAW_DIR}/.venv/bin/python3" "\${EASYCLAW_DIR}/easyclaw.py" "\$@"
+exec "${BIN_DIR}/clawpanel" "\$@"
 EOF
 chmod +x "${BIN_DIR}/easyclaw"
 
 cat > "${BIN_DIR}/easytui" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec easyclaw tui "\$@"
+exec "${BIN_DIR}/clawtui" "\$@"
 EOF
 chmod +x "${BIN_DIR}/easytui"
 
@@ -496,7 +521,7 @@ if [[ "${EUID}" -eq 0 && "${TARGET_USER}" != "root" ]]; then
   fi
 fi
 
-ok "命令已注册: ${BIN_DIR}/easyclaw, ${BIN_DIR}/easytui"
+ok "命令已注册: ${BIN_DIR}/clawpanel, ${BIN_DIR}/clawtui（兼容别名: easyclaw, easytui）"
 
 if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
   local_rc="${TARGET_HOME}/.bashrc"
@@ -515,8 +540,9 @@ echo "命令目录: ${BIN_DIR}"
 echo "OpenClaw 配置: ${OPENCLAW_CONFIG_DETECTED}"
 echo
 echo "使用方式:"
-echo "  ${BIN_DIR}/easyclaw tui"
-echo "  ${BIN_DIR}/easyclaw web            # 默认 4231"
-echo "  ${BIN_DIR}/easyclaw web --port 5001"
-echo "  ${BIN_DIR}/easytui"
+echo "  ${BIN_DIR}/clawpanel tui"
+echo "  ${BIN_DIR}/clawpanel web            # 默认 4231"
+echo "  ${BIN_DIR}/clawpanel web --port 5001"
+echo "  ${BIN_DIR}/clawtui"
+echo "  （兼容）${BIN_DIR}/easyclaw tui"
 echo "============================"

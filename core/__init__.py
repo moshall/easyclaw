@@ -44,9 +44,17 @@ INVALID_TOKEN_PATTERNS = [
 
 
 def _agent_meta_store_path() -> str:
+    override = os.environ.get("OPENCLAW_AGENT_META_PATH", "")
+    if override:
+        return override
     base_dir = os.path.dirname(DEFAULT_CONFIG_PATH) or "."
-    default_path = os.path.join(base_dir, "easyclaw", "agent_meta.json")
-    return os.environ.get("OPENCLAW_AGENT_META_PATH", default_path)
+    default_path = os.path.join(base_dir, "clawpanel", "agent_meta.json")
+    legacy_path = os.path.join(base_dir, "easyclaw", "agent_meta.json")
+    if os.path.exists(default_path):
+        return default_path
+    if os.path.exists(legacy_path):
+        return legacy_path
+    return default_path
 
 
 def _normalize_control_plane_record(value: Any) -> Optional[Dict[str, Any]]:
@@ -368,7 +376,7 @@ def _repair_openclaw_config_if_needed() -> bool:
         try:
             os.makedirs(DEFAULT_BACKUP_DIR, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = f"{DEFAULT_BACKUP_DIR}/easyclaw_autofix_{ts}.json.bak"
+            backup_path = f"{DEFAULT_BACKUP_DIR}/clawpanel_autofix_{ts}.json.bak"
             subprocess.run(["cp", DEFAULT_CONFIG_PATH, backup_path], check=False)
         except Exception:
             pass
@@ -441,7 +449,7 @@ class OpenClawConfig:
             os.makedirs(DEFAULT_BACKUP_DIR, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = f"{DEFAULT_BACKUP_DIR}/easyclaw_{timestamp}.json.bak"
+        backup_path = f"{DEFAULT_BACKUP_DIR}/clawpanel_{timestamp}.json.bak"
         
         if os.path.exists(self.path):
             subprocess.run(["cp", self.path, backup_path], check=False)

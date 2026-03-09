@@ -10,10 +10,24 @@ from urllib import request, error
 from urllib.parse import quote
 
 
-DEFAULT_SEARCH_ADAPTERS_PATH = os.environ.get(
-    "OPENCLAW_SEARCH_ADAPTERS_PATH",
-    "/root/.openclaw/easyclaw/search_adapters.json",
-)
+DEFAULT_OPENCLAW_CONFIG_PATH = os.environ.get("OPENCLAW_CONFIG_PATH", "/root/.openclaw/openclaw.json")
+
+
+def _default_search_adapters_path() -> str:
+    override = str(os.environ.get("OPENCLAW_SEARCH_ADAPTERS_PATH", "") or "").strip()
+    if override:
+        return override
+    base_dir = os.path.dirname(DEFAULT_OPENCLAW_CONFIG_PATH) or "/root/.openclaw"
+    default_path = os.path.join(base_dir, "clawpanel", "search_adapters.json")
+    legacy_path = os.path.join(base_dir, "easyclaw", "search_adapters.json")
+    if os.path.exists(default_path):
+        return default_path
+    if os.path.exists(legacy_path):
+        return legacy_path
+    return default_path
+
+
+DEFAULT_SEARCH_ADAPTERS_PATH = _default_search_adapters_path()
 
 ADAPTER_SPECS: Dict[str, Dict] = {
     "zhipu": {
@@ -37,7 +51,6 @@ ADAPTER_SPECS: Dict[str, Dict] = {
 _COOLDOWN_UNTIL: Dict[str, float] = {}
 _SOURCE_COOLDOWN_UNTIL: Dict[str, float] = {}
 OFFICIAL_SEARCH_SOURCES = ["official:brave", "official:perplexity", "official:grok", "official:gemini", "official:kimi"]
-DEFAULT_OPENCLAW_CONFIG_PATH = os.environ.get("OPENCLAW_CONFIG_PATH", "/root/.openclaw/openclaw.json")
 
 
 def clear_failover_runtime_state():

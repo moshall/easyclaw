@@ -1,4 +1,6 @@
 (function () {
+  const TOKEN_STORAGE_KEY = "clawpanel_web_token";
+  const TOKEN_STORAGE_KEY_LEGACY = "easyclaw_web_token";
   const state = {
     token: "",
     data: null,
@@ -52,11 +54,14 @@
   }
 
   function getSavedToken() {
-    return (localStorage.getItem("easyclaw_web_token") || "").trim();
+    const modern = (localStorage.getItem(TOKEN_STORAGE_KEY) || "").trim();
+    if (modern) return modern;
+    return (localStorage.getItem(TOKEN_STORAGE_KEY_LEGACY) || "").trim();
   }
 
   function setSavedToken(token) {
-    localStorage.setItem("easyclaw_web_token", token);
+    localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    localStorage.setItem(TOKEN_STORAGE_KEY_LEGACY, token);
   }
 
   function showNotice(msg, isError = false) {
