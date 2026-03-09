@@ -44,6 +44,33 @@ ClawPanel 是 OpenClaw 的管理工具，提供：
 - `curl`、`tar`、`bash` 可用（在线安装脚本依赖）
 - 一键脚本会尝试自动安装缺失系统依赖（不含 OpenClaw CLI），如需关闭可加 `--no-auto-deps`
 
+### npm 安装（新增）
+
+全局安装（推荐）：
+
+```bash
+npm install -g @moshall/clawpanel
+```
+
+安装后可直接使用：
+
+```bash
+clawpanel tui
+clawpanel web --port 4231
+```
+
+说明：
+- npm 包会在全局安装后尝试自动执行 `install.sh`；若失败，可手动执行 `clawpanel install` 或 `clawpanel-install`。
+- 首次执行 `clawpanel` 时如果发现运行时未安装，会自动触发引导安装（可用 `CLAWPANEL_AUTO_BOOTSTRAP=0` 关闭）。
+- 需自定义安装目录时，可在 npm 安装前传入环境变量：
+
+```bash
+CLAWPANEL_INSTALL_DIR=/opt/clawpanel \
+CLAWPANEL_BIN_DIR=/usr/local/bin \
+CLAWPANEL_OPENCLAW_HOME=/root/.openclaw \
+npm install -g @moshall/clawpanel
+```
+
 ### 在线一键安装（推荐）
 
 ```bash

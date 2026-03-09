@@ -1,0 +1,50 @@
+{
+  "name": "@moshall/clawpanel",
+  "version": "0.1.0",
+  "description": "ClawPanel npm bridge installer for OpenClaw",
+  "license": "UNLICENSED",
+  "preferGlobal": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "clawpanel": "npm/cli.js",
+    "clawtui": "npm/clawtui.js",
+    "clawpanel-install": "npm/install.js",
+    "easyclaw": "npm/cli.js",
+    "easytui": "npm/clawtui.js"
+  },
+  "scripts": {
+    "postinstall": "node npm/postinstall.js"
+  },
+  "files": [
+    "install.sh",
+    "install-online.sh",
+    "install-docker.sh",
+    "easyclaw.py",
+    "cli.py",
+    "cmd/*.py",
+    "core/*.py",
+    "tui/*.py",
+    "utils/*.py",
+    "web/app.py",
+    "web/static/*",
+    "web/templates/*",
+    "npm/*.js",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moshall/clawpanel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/moshall/clawpanel/issues"
+  },
+  "homepage": "https://github.com/moshall/clawpanel#readme",
+  "keywords": [
+    "openclaw",
+    "clawpanel",
+    "agent",
+    "cli"
+  ]
+}

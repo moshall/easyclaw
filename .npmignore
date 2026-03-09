@@ -1,0 +1,15 @@
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.pytest_cache/
+.venv/
+tests/
+openclaw_src/
+sandbox/
+task_plan.md
+findings.md
+progress.md
+EasyClaw新版Agent创建方案.md
