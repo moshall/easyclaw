@@ -980,7 +980,7 @@ async def get_models_catalog_api():
 @app.post("/api/agents", dependencies=[Depends(verify_token)])
 async def create_agent_api(body: CreateAgentIn):
     capability_preset = _resolve_capability_preset(body.capabilityPreset)
-    ok, detail = create_agent_with_official_cli(
+    ok, detail, created_agent_id = create_agent_with_official_cli(
         agent_id=body.agentId,
         workspace_path=body.workspace,
         access_mode=body.accessMode,
@@ -990,7 +990,7 @@ async def create_agent_api(body: CreateAgentIn):
     if not ok:
         raise HTTPException(status_code=400, detail=f"创建 Agent 失败: {detail}")
     _invalidate_cache()
-    return {"ok": True, "state": _state_payload(force=True)}
+    return {"ok": True, "createdAgentId": created_agent_id or body.agentId, "state": _state_payload(force=True)}
 
 
 @app.post("/api/agents/workspace", dependencies=[Depends(verify_token)])

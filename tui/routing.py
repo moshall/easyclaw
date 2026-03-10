@@ -48,6 +48,10 @@ from core.utils import safe_input, pause_enter
 
 WORKSPACE_SUFFIX_RE = re.compile(r"^workspace(?:_(\d+))?$")
 AGENT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+OPENCLAW_VALID_AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$", re.IGNORECASE)
+OPENCLAW_INVALID_AGENT_ID_CHARS_RE = re.compile(r"[^a-z0-9_-]+")
+OPENCLAW_LEADING_DASH_RE = re.compile(r"^-+")
+OPENCLAW_TRAILING_DASH_RE = re.compile(r"-+$")
 REQUIRED_WORKSPACE_FILES = ["AGENTS.md", "SOUL.md"]
 DEFAULT_CONTROL_PLANE_CAPABILITIES = [
     "model.switch",        # /model
@@ -87,6 +91,86 @@ def _dispatch_manageable_agents() -> List[dict]:
 
 def _is_valid_agent_id(agent_id: str) -> bool:
     return bool(AGENT_ID_RE.match((agent_id or "").strip()))
+
+
+def _normalize_agent_id_like_openclaw(agent_id: str) -> str:
+    """对齐 OpenClaw normalizeAgentId 规则。"""
+    raw = (agent_id or "").strip()
+    if not raw:
+        return "main"
+    if OPENCLAW_VALID_AGENT_ID_RE.match(raw):
+        return raw.lower()
+    normalized = OPENCLAW_INVALID_AGENT_ID_CHARS_RE.sub("-", raw.lower())
+    normalized = OPENCLAW_LEADING_DASH_RE.sub("", normalized)
+    normalized = OPENCLAW_TRAILING_DASH_RE.sub("", normalized)
+    normalized = normalized[:64]
+    return normalized or "main"
+
+
+def _workspace_path_key(path: str) -> str:
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    return os.path.realpath(raw.rstrip("/"))
+
+
+def _resolve_created_agent_entry(agent_id: str, workspace_path: str, existing_ids: Optional[set[str]] = None) -> dict:
+    """解析官方 CLI 实际写入的 Agent（兼容 ID 规范化）。"""
+    agents = [a for a in _get_agents_list() if isinstance(a, dict)]
+    if not agents:
+        return {}
+
+    exact = _agent_by_id(agent_id)
+    if exact:
+        return exact
+
+    normalized_id = _normalize_agent_id_like_openclaw(agent_id)
+    normalized_hit = _agent_by_id(normalized_id)
+    if normalized_hit:
+        return normalized_hit
+
+    lowered = (agent_id or "").strip().lower()
+    lower_hit = next(
+        (a for a in agents if str(a.get("id", "") or "").strip().lower() == lowered),
+        {},
+    )
+    if lower_hit:
+        return lower_hit
+
+    before = set(existing_ids or set())
+    new_agents = []
+    for row in agents:
+        aid = str(row.get("id", "") or "").strip()
+        if aid and aid not in before:
+            new_agents.append(row)
+
+    if len(new_agents) == 1:
+        return new_agents[0]
+
+    workspace_key = _workspace_path_key(workspace_path)
+    if workspace_key:
+        scope = new_agents if new_agents else agents
+        ws_hits = [
+            row
+            for row in scope
+            if _workspace_path_key(str(row.get("workspace", "") or "")) == workspace_key
+        ]
+        if len(ws_hits) == 1:
+            return ws_hits[0]
+        normalized_ws_hit = next(
+            (row for row in ws_hits if str(row.get("id", "") or "").strip() == normalized_id),
+            {},
+        )
+        if normalized_ws_hit:
+            return normalized_ws_hit
+
+    normalized_new_hit = next(
+        (row for row in new_agents if str(row.get("id", "") or "").strip() == normalized_id),
+        {},
+    )
+    if normalized_new_hit:
+        return normalized_new_hit
+    return {}
 
 
 def _next_main_agent_id() -> str:
@@ -741,16 +825,20 @@ def create_agent_with_official_cli(
     capability_preset: str,
     control_plane_capabilities: Optional[List[str]] = None,
     permission_overrides: Optional[dict] = None,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, str]:
+    before_ids = {str(a.get("id", "") or "").strip() for a in _get_agents_list() if isinstance(a, dict)}
     stdout, stderr, code = run_cli(["agents", "add", agent_id, "--workspace", workspace_path])
     if code != 0:
-        return False, stderr or stdout or "openclaw agents add failed"
+        return False, stderr or stdout or "openclaw agents add failed", ""
     config.reload()
-    if not _agent_by_id(agent_id):
-        return False, "官方 CLI 未写入 Agent，无法继续应用 EasyClaw 附加设置"
+    created_entry = _resolve_created_agent_entry(agent_id, workspace_path, before_ids)
+    resolved_agent_id = str(created_entry.get("id", "") or "").strip()
+    if not resolved_agent_id:
+        return False, "官方 CLI 未写入 Agent，无法继续应用 EasyClaw 附加设置", ""
+    resolved_workspace = str(created_entry.get("workspace", "") or "").strip() or workspace_path
     ok = upsert_main_agent_config(
-        agent_id=agent_id,
-        workspace_path=workspace_path,
+        agent_id=resolved_agent_id,
+        workspace_path=resolved_workspace,
         model_primary="",
         model_fallbacks_csv="",
         allow_agents=[],
@@ -763,8 +851,11 @@ def create_agent_with_official_cli(
         require_existing=True,
     )
     if not ok:
-        return False, "官方创建成功，但写入访问范围/能力级别失败"
-    return True, stdout or "ok"
+        return False, "官方创建成功，但写入访问范围/能力级别失败", resolved_agent_id
+    detail = (stdout or "ok").strip() or "ok"
+    if resolved_agent_id != (agent_id or "").strip():
+        detail = f"{detail}（Agent ID 已规范化为: {resolved_agent_id}）"
+    return True, detail, resolved_agent_id
 
 
 def set_agent_model_policy(agent_id: str, primary: str, fallbacks_csv: str) -> bool:
@@ -1272,7 +1363,7 @@ def main_agent_settings_menu():
         capability_preset = _pick_capability_preset(existing_settings["capability_preset"])
         control_caps = existing_settings["control_caps"]
 
-        ok, detail = create_agent_with_official_cli(
+        ok, detail, created_agent_id = create_agent_with_official_cli(
             agent_id=agent_id,
             workspace_path=workspace_path,
             access_mode=access_mode,
@@ -1282,9 +1373,12 @@ def main_agent_settings_menu():
         )
         if ok:
             config.reload()
+            effective_agent_id = created_agent_id or agent_id
             console.print(f"\n[green]✅ 已完成官方 Agent 创建[/]")
-            console.print(f"  [dim]变更: Agent {agent_id}[/]")
+            console.print(f"  [dim]变更: Agent {effective_agent_id}[/]")
             console.print(f"  [dim]结果: workspace -> {workspace_path}[/]")
+            if effective_agent_id != agent_id:
+                console.print(f"  [dim]提示: 输入 ID {agent_id} 已按官方规则规范化[/]")
             console.print(f"  [dim]工作区访问: {ACCESS_MODE_LABELS[access_mode]}[/]")
             console.print(f"  [dim]工具能力: {CAPABILITY_PRESET_LABELS[capability_preset]}[/]")
             console.print("  [dim]生效: 创建已走官方 CLI；附加权限配置即时写入[/]")
