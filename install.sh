@@ -182,7 +182,10 @@ python3_has_venv() {
   if ! command -v python3 >/dev/null 2>&1; then
     return 1
   fi
-  python3 -c "import venv" >/dev/null 2>&1
+  if ! python3 -c "import venv" >/dev/null 2>&1; then
+    return 1
+  fi
+  python3 -m ensurepip --version >/dev/null 2>&1
 }
 
 ensure_python_runtime() {
@@ -204,7 +207,7 @@ ensure_python_runtime() {
     if [[ "${missing_python}" == "1" ]]; then
       err "未找到 python3，请先安装 Python 3.10+"
     else
-      err "检测到 python3 缺少 venv 模块，请先安装 python3-venv"
+      err "检测到 python3 缺少可用的 venv/ensurepip，请先安装 python3-venv"
     fi
     return 1
   fi
@@ -256,7 +259,7 @@ ensure_python_runtime() {
     return 1
   fi
   if ! python3_has_venv; then
-    err "自动安装后 python3 仍缺少 venv 模块，请手动安装 python3-venv。"
+    err "自动安装后 python3 仍缺少可用的 venv/ensurepip，请手动安装 python3-venv。"
     return 1
   fi
 }
@@ -371,11 +374,29 @@ copy_project() {
 
 copy_project
 ok "项目文件已同步到 ${INSTALL_DIR}"
+# rsync --delete 可能会移除 INSTALL_DIR 内的 bin 子目录，这里兜底重建。
+mkdir -p "${BIN_DIR}"
 
 VENV_DIR="${INSTALL_DIR}/.venv"
-if [[ ! -d "${VENV_DIR}" ]]; then
+create_virtualenv() {
   info "创建虚拟环境: ${VENV_DIR}"
-  python3 -m venv "${VENV_DIR}"
+  if python3 -m venv "${VENV_DIR}"; then
+    return 0
+  fi
+
+  if [[ "${EASYCLAW_AUTO_DEPS:-1}" == "1" ]]; then
+    warn "虚拟环境创建失败，尝试修复系统 Python 运行时后重试。"
+    if ensure_python_runtime && python3 -m venv "${VENV_DIR}"; then
+      return 0
+    fi
+  fi
+
+  err "创建虚拟环境失败。请确认 python3-venv 可用后重试。"
+  return 1
+}
+
+if [[ ! -d "${VENV_DIR}" ]]; then
+  create_virtualenv
 fi
 
 PY_BIN="${VENV_DIR}/bin/python3"
@@ -383,7 +404,8 @@ PY_BIN="${VENV_DIR}/bin/python3"
 if [[ ! -x "${PY_BIN}" ]]; then
   warn "检测到虚拟环境不完整，重建: ${VENV_DIR}"
   rm -rf "${VENV_DIR}"
-  python3 -m venv "${VENV_DIR}"
+  create_virtualenv
+  PY_BIN="${VENV_DIR}/bin/python3"
 fi
 
 ensure_venv_pip() {
@@ -396,6 +418,19 @@ ensure_venv_pip() {
 
   if "${PY_BIN}" -m pip --version >/dev/null 2>&1; then
     return 0
+  fi
+
+  if [[ "${EASYCLAW_AUTO_DEPS:-1}" == "1" ]]; then
+    warn "尝试安装缺失的 Python venv 依赖并重建虚拟环境..."
+    if ensure_python_runtime; then
+      rm -rf "${VENV_DIR}"
+      create_virtualenv || return 1
+      PY_BIN="${VENV_DIR}/bin/python3"
+      "${PY_BIN}" -m ensurepip --upgrade >/dev/null 2>&1 || true
+      if "${PY_BIN}" -m pip --version >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
   fi
 
   err "虚拟环境中 pip 不可用。请先安装 python3-venv（Debian/Ubuntu）后重试。"
