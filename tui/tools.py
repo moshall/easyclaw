@@ -45,6 +45,20 @@ from core.search_adapters import (
 console = Console()
 
 
+def _run_menu_action(action, label: str):
+    try:
+        action()
+    except KeyboardInterrupt:
+        console.print(f"\n[yellow]已取消: {label}[/]")
+        pause_enter()
+    except EOFError:
+        console.print(f"\n[yellow]输入流结束，已返回当前菜单: {label}[/]")
+        pause_enter()
+    except Exception as e:
+        console.print(f"\n[bold red]❌ {label} 执行失败: {e}[/]")
+        pause_enter()
+
+
 def _resolve_adapter_provider_input(raw: str) -> str:
     v = (raw or "").strip().lower()
     alias = {
@@ -261,9 +275,9 @@ def menu_tools():
         if choice == "0":
             break
         elif choice == "1":
-            menu_search_services()
+            _run_menu_action(menu_search_services, "搜索服务管理")
         elif choice == "2":
-            menu_embeddings()
+            _run_menu_action(menu_embeddings, "向量化/记忆检索配置")
 
 
 def menu_search_services():
@@ -304,11 +318,11 @@ def menu_search_services():
         if choice == "0":
             break
         elif choice == "1":
-            menu_search_service_maintenance()
+            _run_menu_action(menu_search_service_maintenance, "添加与维护搜索服务")
         elif choice == "2":
-            activate_configured_search_provider()
+            _run_menu_action(activate_configured_search_provider, "激活默认搜索服务")
         elif choice == "3":
-            menu_search_failover_settings()
+            _run_menu_action(menu_search_failover_settings, "搜索服务主备切换设置")
 
 
 def menu_search_service_maintenance():
@@ -329,9 +343,9 @@ def menu_search_service_maintenance():
         if choice == "0":
             return
         if choice == "1":
-            menu_official_search()
+            _run_menu_action(menu_official_search, "官方搜索配置")
         elif choice == "2":
-            menu_thirdparty_search()
+            _run_menu_action(menu_thirdparty_search, "扩展搜索配置")
 
 
 def _resolve_unified_source_input(raw: str) -> str:
@@ -454,7 +468,7 @@ def menu_official_search():
             idx = int(choice) - 1
             if 0 <= idx < len(providers):
                 provider = providers[idx]
-                configure_official_search(provider)
+                _run_menu_action(lambda p=provider: configure_official_search(p), f"配置官方搜索服务 {provider}")
 
 
 def configure_official_search(provider: str):
@@ -838,11 +852,11 @@ def menu_thirdparty_search():
         if choice == "0":
             break
         elif choice == "1":
-            _configure_adapter_provider("zhipu")
+            _run_menu_action(lambda: _configure_adapter_provider("zhipu"), "配置 zhipu")
         elif choice == "2":
-            _configure_adapter_provider("serper")
+            _run_menu_action(lambda: _configure_adapter_provider("serper"), "配置 serper")
         elif choice == "3":
-            _configure_adapter_provider("tavily")
+            _run_menu_action(lambda: _configure_adapter_provider("tavily"), "配置 tavily")
         elif choice == "4":
             console.print()
             console.print("[dim]可输入: 1=zhipu, 2=serper, 3=tavily，或直接输入名称；留空清除[/]")
@@ -1074,7 +1088,7 @@ def menu_embeddings():
             pause_enter()
             continue
         if choice == "6":
-            _manage_memory_provider_key()
+            _run_menu_action(_manage_memory_provider_key, "管理向量 Provider 凭据")
             pause_enter()
             continue
         if choice == "v":

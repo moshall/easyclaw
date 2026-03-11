@@ -15,6 +15,20 @@ from core import run_cli, run_cli_json
 console = Console()
 
 
+def _run_menu_action(action, label: str):
+    try:
+        action()
+    except KeyboardInterrupt:
+        console.print(f"\n[yellow]已取消: {label}[/]")
+        pause_enter()
+    except EOFError:
+        console.print(f"\n[yellow]输入流结束，已返回当前菜单: {label}[/]")
+        pause_enter()
+    except Exception as e:
+        console.print(f"\n[bold red]❌ {label} 执行失败: {e}[/]")
+        pause_enter()
+
+
 
 
 def menu_gateway():
@@ -71,15 +85,15 @@ def menu_gateway():
         if choice == "0":
             break
         elif choice == "1":
-            set_gateway_port()
+            _run_menu_action(set_gateway_port, "修改端口")
         elif choice == "2":
-            set_gateway_bind()
+            _run_menu_action(set_gateway_bind, "修改绑定模式")
         elif choice == "3":
-            set_gateway_auth()
+            _run_menu_action(set_gateway_auth, "修改认证模式")
         elif choice == "4":
-            set_trusted_proxies()
+            _run_menu_action(set_trusted_proxies, "设置信任代理")
         elif choice == "5":
-            set_webui_toggle()
+            _run_menu_action(set_webui_toggle, "切换 WebUI")
 
 
 def get_gateway_config() -> Dict:

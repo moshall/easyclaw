@@ -2,7 +2,7 @@
 import json
 import urllib.request
 import urllib.error
-from typing import List, Dict
+from typing import Any, List, Dict, Tuple
 import os
 
 from . import run_cli
@@ -83,6 +83,9 @@ def get_custom_models(provider: str, base_url: str, api_key: str = "") -> List[D
         models_url = base + "/v1/models"
 
     req = urllib.request.Request(models_url)
+    # 部分网关/WAF 会拦截无 User-Agent 的请求（返回 403/1010）。
+    req.add_header("User-Agent", "clawpanel-model-discovery/1.0")
+    req.add_header("Accept", "application/json")
     if api_key:
         req.add_header("Authorization", f"Bearer {api_key}")
 
@@ -96,3 +99,145 @@ def get_custom_models(provider: str, base_url: str, api_key: str = "") -> List[D
             models.append({"key": model_id, "name": model_id})
 
     return _normalize_models(models, provider)
+
+
+def _build_endpoint(base_url: str, suffix: str) -> str:
+    base = (base_url or "").strip().rstrip("/")
+    if base.endswith("/v1"):
+        return f"{base}{suffix}"
+    return f"{base}/v1{suffix}"
+
+
+def _http_json_post(url: str, payload: Dict[str, Any], headers: Dict[str, str], timeout: int = 12) -> Tuple[bool, str]:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+    )
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json")
+    req.add_header("User-Agent", "clawpanel-responses-probe/1.0")
+    for k, v in (headers or {}).items():
+        if v:
+            req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            _ = resp.read()
+        return True, ""
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            raw = e.read().decode("utf-8", errors="ignore").strip()
+            detail = raw[:280]
+        except Exception:
+            detail = ""
+        if detail:
+            return False, f"HTTP {e.code}: {detail}"
+        return False, f"HTTP {e.code}: {e.reason}"
+    except Exception as e:
+        return False, str(e)
+
+
+def _discover_probe_model(base_url: str, api_key: str = "") -> str:
+    models_url = _build_endpoint(base_url, "/models")
+    req = urllib.request.Request(models_url)
+    req.add_header("User-Agent", "clawpanel-responses-probe/1.0")
+    req.add_header("Accept", "application/json")
+    if api_key:
+        req.add_header("Authorization", f"Bearer {api_key}")
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        for row in data.get("data", []) if isinstance(data, dict) else []:
+            if not isinstance(row, dict):
+                continue
+            mid = str(row.get("id") or row.get("name") or "").strip()
+            if mid:
+                return mid
+    except Exception:
+        return ""
+    return ""
+
+
+def probe_openai_responses_input_mode(base_url: str, api_key: str = "", model: str = "") -> Dict[str, Any]:
+    """
+    Probe whether /v1/responses accepts string input, array input, or both.
+
+    Returns:
+      {
+        "detectedMode": "array|string|both|none",
+        "stringOk": bool,
+        "arrayOk": bool,
+        "stringError": str,
+        "arrayError": str,
+        "model": str,
+        "endpoint": str,
+      }
+    """
+    base = (base_url or "").strip()
+    if not base:
+        return {
+            "detectedMode": "none",
+            "stringOk": False,
+            "arrayOk": False,
+            "stringError": "baseUrl is required",
+            "arrayError": "baseUrl is required",
+            "model": "",
+            "endpoint": "",
+        }
+
+    model_id = (model or "").strip() or _discover_probe_model(base, api_key=api_key)
+    endpoint = _build_endpoint(base, "/responses")
+    if not model_id:
+        return {
+            "detectedMode": "none",
+            "stringOk": False,
+            "arrayOk": False,
+            "stringError": "unable to resolve probe model",
+            "arrayError": "unable to resolve probe model",
+            "model": "",
+            "endpoint": endpoint,
+        }
+
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    string_payload = {
+        "model": model_id,
+        "input": "ping",
+        "max_output_tokens": 16,
+    }
+    array_payload = {
+        "model": model_id,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "ping",
+                    }
+                ],
+            }
+        ],
+        "max_output_tokens": 16,
+    }
+
+    string_ok, string_err = _http_json_post(endpoint, string_payload, headers, timeout=12)
+    array_ok, array_err = _http_json_post(endpoint, array_payload, headers, timeout=12)
+
+    detected = "none"
+    if string_ok and array_ok:
+        detected = "both"
+    elif array_ok:
+        detected = "array"
+    elif string_ok:
+        detected = "string"
+
+    return {
+        "detectedMode": detected,
+        "stringOk": bool(string_ok),
+        "arrayOk": bool(array_ok),
+        "stringError": str(string_err or ""),
+        "arrayError": str(array_err or ""),
+        "model": model_id,
+        "endpoint": endpoint,
+    }

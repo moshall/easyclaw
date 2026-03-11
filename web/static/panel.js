@@ -5,6 +5,8 @@
     token: "",
     data: null,
     providerOptions: [],
+    channelSnapshot: null,
+    pluginSnapshot: null,
     rollbackBackups: [],
     rollbackMeta: { configPath: "", backupDir: "" },
   };
@@ -658,7 +660,7 @@
 
     const selectedProtocol = $("customProviderProtocol").value;
     const protocolRaw = (state.data.providerProtocols || []).slice();
-    const preferred = ["openai-completions", "anthropic-completions", "openai-chat", "anthropic-messages", "gemini-v1beta"];
+    const preferred = ["openai-responses", "openai-completions", "anthropic-completions", "openai-chat", "anthropic-messages", "gemini-v1beta"];
     const protocolSorted = preferred.filter((x) => protocolRaw.includes(x)).concat(protocolRaw.filter((x) => !preferred.includes(x)));
     const protocolOpts = protocolSorted.map((p) => ({ value: p, label: p }));
     fillSelect($("customProviderProtocol"), protocolOpts);
@@ -678,17 +680,27 @@
     });
     if (!rows.length) {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td colspan="5" class="muted">暂无服务商</td>`;
+      tr.innerHTML = `<td colspan="6" class="muted">暂无服务商</td>`;
       tableBody.appendChild(tr);
     } else {
       rows.forEach((row) => {
+        const responsesMode = String(row.responsesInputMode || "").trim();
+        const responsesDetected = String(row.responsesProbeDetected || "").trim();
+        const responsesText = responsesMode
+          ? `${responsesMode}${responsesDetected ? ` / ${responsesDetected}` : ""}`
+          : "-";
+        const responsesBtn = String(row.api || "").trim().toLowerCase() === "openai-responses"
+          ? `<button class="btn tiny subtle" data-action="responses-provider" data-provider="${row.provider}" data-mode="${responsesMode || "auto"}">Responses 设置</button>`
+          : "";
         const tr = document.createElement("tr");
         tr.innerHTML = `
           <td>${row.provider}</td>
           <td>${row.authCount}</td>
           <td>${row.keyCount}</td>
           <td>${row.modelCount}</td>
+          <td class="mono">${responsesText}</td>
           <td>
+            ${responsesBtn}
             <button class="btn tiny subtle" data-action="discover-provider" data-provider="${row.provider}">发现模型</button>
             <button class="btn tiny danger" data-action="delete-provider" data-provider="${row.provider}">删除</button>
           </td>
@@ -698,6 +710,14 @@
     }
 
     syncOfficialAuthMode();
+    syncCustomProviderProtocolFields();
+  }
+
+  function syncCustomProviderProtocolFields() {
+    const protocol = String($("customProviderProtocol").value || "").trim().toLowerCase();
+    const box = $("customResponsesModeBox");
+    if (!box) return;
+    box.style.display = protocol === "openai-responses" ? "block" : "none";
   }
 
   function getSelectedOfficialAuthOption() {
@@ -778,6 +798,134 @@
     });
   }
 
+  function boolText(value, trueText = "是", falseText = "否") {
+    if (value === true) return `✅ ${trueText}`;
+    if (value === false) return `❌ ${falseText}`;
+    return "-";
+  }
+
+  function renderChannelStatus() {
+    if (!$("channelRows")) return;
+    const snapshot = state.channelSnapshot || {};
+    const listInfo = snapshot.list || {};
+    const statusInfo = snapshot.status || {};
+    const pluginsInfo = snapshot.plugins || {};
+    const catalog = Array.isArray(snapshot.catalog) && snapshot.catalog.length
+      ? snapshot.catalog
+      : [
+          { id: "telegram", label: "Telegram" },
+          { id: "discord", label: "Discord" },
+          { id: "feishu", label: "Feishu / Lark" },
+        ];
+
+    $("channelsGatewayStatus").textContent = statusInfo.ok
+      ? "✅ 已获取 channels.status --probe"
+      : `⚠️ 获取失败（${statusInfo.error || "未知错误"}）`;
+    $("feishuPluginState").textContent = pluginsInfo.feishuInstalled ? "✅ 已安装" : "❌ 未安装";
+
+    const chat = (listInfo && listInfo.chat && typeof listInfo.chat === "object") ? listInfo.chat : {};
+    const statusPayload = (statusInfo && statusInfo.payload && typeof statusInfo.payload === "object")
+      ? statusInfo.payload
+      : {};
+    const channelAccounts = (statusPayload.channelAccounts && typeof statusPayload.channelAccounts === "object")
+      ? statusPayload.channelAccounts
+      : {};
+
+    const body = $("channelRows");
+    body.innerHTML = "";
+
+    catalog.forEach((entry) => {
+      const channel = String(entry.id || "").trim();
+      if (!channel) return;
+      const configured = Array.isArray(chat[channel]) ? chat[channel].map((x) => String(x || "").trim()).filter(Boolean) : [];
+      const statusRowsRaw = Array.isArray(channelAccounts[channel]) ? channelAccounts[channel] : [];
+      const statusRows = statusRowsRaw.filter((x) => x && typeof x === "object");
+
+      const accountSet = new Set();
+      configured.forEach((x) => accountSet.add(x));
+      statusRows.forEach((row) => accountSet.add(String(row.accountId || "default").trim() || "default"));
+      if (!accountSet.size) accountSet.add("default");
+
+      const statusByAccount = new Map();
+      statusRows.forEach((row) => {
+        const accountId = String(row.accountId || "default").trim() || "default";
+        statusByAccount.set(accountId, row);
+      });
+
+      Array.from(accountSet).sort().forEach((accountId) => {
+        const row = statusByAccount.get(accountId) || {};
+        const probe = row.probe && typeof row.probe === "object" ? row.probe : null;
+        const probeText = probe && typeof probe.ok === "boolean"
+          ? (probe.ok ? "✅ ok" : "❌ fail")
+          : "-";
+        const err = String(row.lastError || "").trim();
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${channel}</td>
+          <td>${accountId}</td>
+          <td>${configured.includes(accountId) ? "✅" : "⬜"}</td>
+          <td>${boolText(row.enabled)}</td>
+          <td>${boolText(row.linked)}</td>
+          <td>${boolText(row.running)}</td>
+          <td>${boolText(row.connected)}</td>
+          <td>${probeText}</td>
+          <td class="mono">${err || "-"}</td>
+        `;
+        body.appendChild(tr);
+      });
+    });
+
+    if (!body.children.length) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td colspan="9" class="muted">暂无通道数据</td>`;
+      body.appendChild(tr);
+    }
+  }
+
+  function renderPluginStatus() {
+    if (!$("pluginRows")) return;
+    const snapshot = state.pluginSnapshot || {};
+    const plugins = Array.isArray(snapshot.plugins) ? snapshot.plugins : [];
+    const diagnostics = Array.isArray(snapshot.diagnostics) ? snapshot.diagnostics : [];
+
+    $("pluginDiagnostics").textContent = diagnostics.length
+      ? JSON.stringify(diagnostics, null, 2)
+      : "";
+
+    const body = $("pluginRows");
+    body.innerHTML = "";
+    if (!plugins.length) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td colspan="6" class="muted">暂无插件或尚未加载</td>`;
+      body.appendChild(tr);
+      return;
+    }
+
+    plugins.forEach((plugin) => {
+      const id = String(plugin.id || "").trim();
+      const name = String(plugin.name || "").trim();
+      const status = String(plugin.status || "").trim();
+      const version = String(plugin.version || "").trim();
+      const source = String(plugin.source || "").trim();
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td class="mono">${id || "-"}</td>
+        <td>${name || "-"}</td>
+        <td>${status || "-"}</td>
+        <td>${version || "-"}</td>
+        <td class="mono">${source || "-"}</td>
+        <td>
+          <button class="btn tiny subtle" data-plugin-action="enable" data-plugin-id="${id}">启用</button>
+          <button class="btn tiny subtle" data-plugin-action="disable" data-plugin-id="${id}">禁用</button>
+          <button class="btn tiny subtle" data-plugin-action="update" data-plugin-id="${id}">更新</button>
+          <button class="btn tiny danger" data-plugin-action="uninstall" data-plugin-id="${id}">卸载</button>
+        </td>
+      `;
+      body.appendChild(tr);
+    });
+  }
+
   function syncAdapterFields() {
     const provider = $("adapterProvider").value;
     const cfg = (((state.data || {}).search || {}).adapterConfig || {}).providers || {};
@@ -802,6 +950,8 @@
     renderProviderApiManager();
     renderSearchForms();
     renderRollbackBackups();
+    renderChannelStatus();
+    renderPluginStatus();
   }
 
   async function refreshState() {
@@ -870,6 +1020,18 @@
     };
     state.rollbackBackups = payload.items || [];
     renderRollbackBackups();
+  }
+
+  async function refreshChannelStatus() {
+    const payload = await api("/api/channels/status");
+    state.channelSnapshot = payload || null;
+    renderChannelStatus();
+  }
+
+  async function refreshPluginStatus() {
+    const payload = await api("/api/plugins/status");
+    state.pluginSnapshot = payload || null;
+    renderPluginStatus();
   }
 
   async function saveGlobalModel() {
@@ -1011,6 +1173,9 @@
         baseUrl: $("customProviderBaseUrl").value.trim(),
         apiKey: $("customProviderApiKey").value,
         discoverModels: $("customProviderDiscover").checked,
+        responsesInputMode: $("customProviderResponsesMode").value,
+        probeResponsesInput: $("customProviderProbeResponses").checked,
+        probeModel: $("customProviderProbeModel").value.trim(),
       }),
     });
     await refreshState();
@@ -1018,6 +1183,17 @@
     const adapted = res.adaptedApi || {};
     if (adapted.from && adapted.to && adapted.from !== adapted.to) {
       showNotice(`已保存自定义服务商（协议自动兼容：${adapted.from} -> ${adapted.to}）`);
+      return;
+    }
+    const mode = (((res || {}).responsesMode || {}).mode || "").trim();
+    const probe = (((res || {}).responsesMode || {}).probe || {});
+    if (mode) {
+      const detected = String(probe.detectedMode || "").trim();
+      if (detected) {
+        showNotice(`已保存自定义服务商配置（Responses: ${mode}/${detected}）`);
+        return;
+      }
+      showNotice(`已保存自定义服务商配置（Responses: ${mode}）`);
       return;
     }
     showNotice("已保存自定义服务商配置");
@@ -1038,6 +1214,43 @@
     await refreshState();
     await refreshProviderOptions();
     showNotice(`已发现 ${res.count || 0} 个模型: ${provider}`);
+  }
+
+  async function setProviderResponsesMode(provider, currentMode = "auto") {
+    const rawMode = window.prompt("请输入 Responses 输入模式（auto/array/string）", currentMode || "auto");
+    if (rawMode === null) return;
+    const mode = String(rawMode || "").trim().toLowerCase();
+    if (!["auto", "array", "string"].includes(mode)) {
+      throw new Error("输入模式只支持 auto / array / string");
+    }
+    const probe = window.confirm("是否立即探测该服务商的 string/array 兼容性？");
+    let probeModel = "";
+    if (probe) {
+      const rawModel = window.prompt("探测模型 ID（留空自动发现）", "");
+      if (rawModel === null) {
+        return;
+      }
+      probeModel = String(rawModel || "").trim();
+    }
+
+    const res = await api("/api/providers/responses-mode", {
+      method: "POST",
+      body: JSON.stringify({
+        provider,
+        mode,
+        probe,
+        probeModel,
+      }),
+    });
+    await refreshState();
+    await refreshProviderOptions();
+    const modeInfo = (res.responsesMode || {});
+    const detected = ((modeInfo.probe || {}).detectedMode || "").trim();
+    if (detected) {
+      showNotice(`已更新 ${provider} Responses 输入模式: ${modeInfo.mode || mode} / ${detected}`);
+      return;
+    }
+    showNotice(`已更新 ${provider} Responses 输入模式: ${modeInfo.mode || mode}`);
   }
 
   async function createAgent() {
@@ -1236,6 +1449,123 @@
     }
   }
 
+  async function connectManagedChannel() {
+    const channel = $("channelConnectType").value;
+    if (!["telegram", "discord"].includes(channel)) {
+      throw new Error("该入口仅支持 telegram / discord");
+    }
+    const account = $("channelAccount").value.trim();
+    const token = $("channelToken").value.trim();
+    const useEnv = $("channelUseEnv").checked;
+    await api("/api/channels/connect", {
+      method: "POST",
+      body: JSON.stringify({
+        channel,
+        account,
+        token,
+        useEnv,
+      }),
+    });
+    await refreshState();
+    await refreshChannelStatus();
+    if (!useEnv) {
+      $("channelToken").value = "";
+    }
+    showNotice(`已配置 ${channel} 通道`);
+  }
+
+  async function disconnectManagedChannel() {
+    const channel = $("channelConnectType").value;
+    const account = $("channelAccount").value.trim();
+    await api("/api/channels/disconnect", {
+      method: "POST",
+      body: JSON.stringify({
+        channel,
+        account,
+      }),
+    });
+    await refreshState();
+    await refreshChannelStatus();
+    showNotice(`已断开 ${channel} 通道`);
+  }
+
+  async function connectFeishuChannel() {
+    const appId = $("feishuAppId").value.trim();
+    const appSecret = $("feishuAppSecret").value.trim();
+    if (!appId || !appSecret) {
+      throw new Error("Feishu 需要 App ID 与 App Secret");
+    }
+    const account = $("feishuAccount").value.trim() || "main";
+    await api("/api/channels/connect", {
+      method: "POST",
+      body: JSON.stringify({
+        channel: "feishu",
+        account,
+        appId,
+        appSecret,
+        feishuDomain: $("feishuDomain").value,
+        installPlugin: $("feishuInstallPlugin").checked,
+      }),
+    });
+    await refreshState();
+    await refreshChannelStatus();
+    $("feishuAppSecret").value = "";
+    showNotice("已配置 Feishu / Lark 通道");
+  }
+
+  async function installPluginSpec() {
+    const spec = $("pluginInstallSpec").value.trim();
+    if (!spec) {
+      throw new Error("请先输入插件 spec");
+    }
+    await api("/api/plugins/install", {
+      method: "POST",
+      body: JSON.stringify({
+        spec,
+        pin: $("pluginInstallPin").checked,
+      }),
+    });
+    await refreshState();
+    await refreshPluginStatus();
+    showNotice(`插件安装完成: ${spec}`);
+  }
+
+  async function updateAllPlugins() {
+    await api("/api/plugins/update", {
+      method: "POST",
+      body: JSON.stringify({ all: true }),
+    });
+    await refreshState();
+    await refreshPluginStatus();
+    showNotice("插件更新已执行（--all）");
+  }
+
+  async function pluginAction(action, pluginId) {
+    const id = String(pluginId || "").trim();
+    if (!id) throw new Error("无效插件 ID");
+    if (action === "enable") {
+      await api("/api/plugins/enable", { method: "POST", body: JSON.stringify({ pluginId: id }) });
+      showNotice(`已启用插件: ${id}`);
+    } else if (action === "disable") {
+      await api("/api/plugins/disable", { method: "POST", body: JSON.stringify({ pluginId: id }) });
+      showNotice(`已禁用插件: ${id}`);
+    } else if (action === "update") {
+      await api("/api/plugins/update", { method: "POST", body: JSON.stringify({ pluginId: id, all: false }) });
+      showNotice(`已更新插件: ${id}`);
+    } else if (action === "uninstall") {
+      if (!window.confirm(`确认卸载插件 ${id}？`)) return;
+      await api("/api/plugins/uninstall", {
+        method: "POST",
+        body: JSON.stringify({ pluginId: id, keepFiles: false }),
+      });
+      showNotice(`已卸载插件: ${id}`);
+    } else {
+      throw new Error(`不支持的插件动作: ${action}`);
+    }
+    await refreshState();
+    await refreshPluginStatus();
+  }
+
   async function runAction(fn, notifyError = true) {
     try {
       await fn();
@@ -1271,6 +1601,8 @@
           runAction(refreshHealthDetails);
         } else if (btn.dataset.target === "services") {
           runAction(refreshRollbackBackups);
+          runAction(refreshChannelStatus);
+          runAction(refreshPluginStatus);
         }
       });
     });
@@ -1280,6 +1612,12 @@
         const target = btn.dataset.subtarget;
         if (group && target) {
           updateSubtab(group, target);
+          if (group === "services" && target === "services-channels") {
+            runAction(refreshChannelStatus);
+          }
+          if (group === "services" && target === "services-plugins") {
+            runAction(refreshPluginStatus);
+          }
         }
       });
     });
@@ -1313,6 +1651,13 @@
     $("addCustomProviderBtn").addEventListener("click", () => runActionWithButton("addCustomProviderBtn", addCustomProvider, "保存中..."));
 
     $("refreshModelPoolBtn").addEventListener("click", () => runAction(refreshOfficialModelPool));
+    $("refreshChannelsBtn").addEventListener("click", () => runAction(refreshChannelStatus));
+    $("connectChannelBtn").addEventListener("click", () => runAction(connectManagedChannel));
+    $("disconnectChannelBtn").addEventListener("click", () => runAction(disconnectManagedChannel));
+    $("connectFeishuBtn").addEventListener("click", () => runAction(connectFeishuChannel));
+    $("refreshPluginsBtn").addEventListener("click", () => runAction(refreshPluginStatus));
+    $("installPluginBtn").addEventListener("click", () => runAction(installPluginSpec));
+    $("updateAllPluginsBtn").addEventListener("click", () => runAction(updateAllPlugins));
 
     $("agentModelId").addEventListener("change", syncAgentDrivenForms);
     $("agentOpsId").addEventListener("change", syncAgentDrivenForms);
@@ -1338,6 +1683,7 @@
     });
     $("adapterProvider").addEventListener("change", syncAdapterFields);
     $("officialAuthOption").addEventListener("change", syncOfficialAuthMode);
+    $("customProviderProtocol").addEventListener("change", syncCustomProviderProtocolFields);
 
     $("modelProviderFilter").addEventListener("change", () => {
       renderModelPool();
@@ -1370,7 +1716,17 @@
         runAction(() => deleteProvider(provider));
       } else if (action === "discover-provider") {
         runAction(() => discoverProviderModels(provider));
+      } else if (action === "responses-provider") {
+        runAction(() => setProviderResponsesMode(provider, btn.dataset.mode || "auto"));
       }
+    });
+
+    $("pluginRows").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-plugin-action]");
+      if (!btn) return;
+      const action = btn.dataset.pluginAction;
+      const pluginId = btn.dataset.pluginId;
+      runAction(() => pluginAction(action, pluginId));
     });
 
     $("saveTokenBtn").addEventListener("click", async () => {
@@ -1400,6 +1756,8 @@
 
     await runAction(refreshState);
     await runAction(refreshRollbackBackups);
+    await runAction(refreshChannelStatus);
+    await runAction(refreshPluginStatus);
   }
 
   bootstrap();

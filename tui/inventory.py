@@ -8,7 +8,7 @@ import re
 import time
 import urllib.request
 import urllib.error
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -37,11 +37,37 @@ from core.write_engine import (
     is_dry_run,
     upsert_provider_api_key,
 )
-from core.datasource import get_official_models, get_custom_models
+from core.datasource import (
+    get_official_models,
+    get_custom_models,
+    probe_openai_responses_input_mode,
+)
+from core.provider_responses import (
+    get_provider_responses_input_mode,
+    get_provider_responses_probe,
+    normalize_responses_input_mode,
+    set_provider_responses_input_mode,
+    set_provider_responses_probe,
+)
 
 console = Console()
 
 from core.utils import safe_input, pause_enter
+
+
+def _run_menu_action(action, label: str):
+    try:
+        action()
+    except KeyboardInterrupt:
+        console.print(f"\n[yellow]已取消: {label}[/]")
+        pause_enter()
+    except EOFError:
+        console.print(f"\n[yellow]输入流结束，已返回当前菜单: {label}[/]")
+        pause_enter()
+    except Exception as e:
+        console.print(f"\n[bold red]❌ {label} 执行失败: {e}[/]")
+        pause_enter()
+
 
 MODELS_PROVIDERS_CACHE_TTL = int(os.environ.get("EASYCLAW_MODELS_PROVIDERS_CACHE_TTL", "2"))
 PLUGIN_PROVIDER_CACHE_TTL = int(os.environ.get("EASYCLAW_PLUGIN_PROVIDER_CACHE_TTL", "45"))
@@ -133,6 +159,16 @@ API_KEY_PROVIDERS = {
     "openrouter": "openrouter-api-key",
     "gemini": "gemini-api-key",
     "google-gemini-cli": "gemini-api-key",
+    "volcengine": "volcengine-api-key",
+    "byteplus": "byteplus-api-key",
+    "qianfan": "qianfan-api-key",
+    "ai-gateway": "ai-gateway-api-key",
+    "cloudflare-ai-gateway": "cloudflare-ai-gateway-api-key",
+    "litellm": "litellm-api-key",
+    "synthetic": "synthetic-api-key",
+    "venice": "venice-api-key",
+    "togetherai": "together-api-key",
+    "shengsuanyun": "shengsuanyun-api-key",
     "zai": "zai-api-key",
     "xiaomi": "xiaomi-api-key",
     "minimax": "minimax-api",
@@ -379,12 +415,130 @@ def apply_official_api_key_via_onboard(provider: str, auth_choice: str, api_key:
 
 
 API_PROTOCOLS = [
+    "openai-responses",
     "openai-chat",
     "openai-completions",
     "anthropic-messages",
     "anthropic-completions",
     "gemini-v1beta",
 ]
+API_PROTOCOL_FALLBACKS = {
+    "openai-responses": "openai-completions",
+    "openai-chat": "openai-completions",
+    "anthropic-messages": "anthropic-completions",
+}
+RESPONSES_INPUT_MODES = ["auto", "array", "string"]
+
+
+def _responses_input_mode_label(mode: str) -> str:
+    token = normalize_responses_input_mode(mode)
+    if token == "array":
+        return "array（仅数组）"
+    if token == "string":
+        return "string（仅字符串）"
+    return "auto（自动）"
+
+
+def get_provider_responses_mode_status(provider: str) -> Dict[str, Any]:
+    pid = normalize_provider_name(provider)
+    mode = get_provider_responses_input_mode(pid)
+    probe = get_provider_responses_probe(pid)
+    return {
+        "mode": normalize_responses_input_mode(mode),
+        "probe": probe if isinstance(probe, dict) else {},
+    }
+
+
+def apply_provider_responses_mode_config(
+    provider: str,
+    mode: str = "auto",
+    probe: bool = False,
+    base_url: str = "",
+    api_key: str = "",
+    probe_model: str = "",
+) -> Dict[str, Any]:
+    pid = normalize_provider_name(provider)
+    normalized_mode = normalize_responses_input_mode(mode)
+    saved = set_provider_responses_input_mode(pid, normalized_mode)
+    if not saved:
+        return {
+            "ok": False,
+            "mode": normalized_mode,
+            "probe": {},
+            "error": "写入 Responses 输入模式失败",
+        }
+
+    probe_payload: Dict[str, Any] = {}
+    probe_error = ""
+    if probe:
+        base = str(base_url or "").strip()
+        if not base:
+            probe_error = "baseUrl 为空，无法探测"
+        else:
+            probe_payload = probe_openai_responses_input_mode(
+                base_url=base,
+                api_key=str(api_key or "").strip(),
+                model=str(probe_model or "").strip(),
+            )
+            set_provider_responses_probe(
+                pid,
+                detected_mode=str(probe_payload.get("detectedMode", "unknown") or "unknown"),
+                string_ok=bool(probe_payload.get("stringOk", False)),
+                array_ok=bool(probe_payload.get("arrayOk", False)),
+                string_error=str(probe_payload.get("stringError", "") or ""),
+                array_error=str(probe_payload.get("arrayError", "") or ""),
+            )
+
+    return {
+        "ok": True,
+        "mode": normalized_mode,
+        "probe": probe_payload,
+        "probeError": probe_error,
+    }
+
+
+def _prompt_responses_input_mode_settings(provider: str) -> tuple[str, bool, str]:
+    pid = normalize_provider_name(provider)
+    current_mode = get_provider_responses_input_mode(pid)
+    current_probe = get_provider_responses_probe(pid)
+
+    console.print()
+    console.print("[bold]OpenAI Responses 输入模式:[/]")
+    console.print("  [cyan]1[/] auto（自动；推荐）")
+    console.print("  [cyan]2[/] array（固定数组 input）")
+    console.print("  [cyan]3[/] string（固定字符串 input）")
+    if current_probe:
+        console.print(
+            "  [dim]最近探测: detected="
+            + str(current_probe.get("detectedMode", "unknown"))
+            + f" | string={bool(current_probe.get('stringOk', False))}"
+            + f" | array={bool(current_probe.get('arrayOk', False))}[/]"
+        )
+
+    default_choice = "1"
+    if normalize_responses_input_mode(current_mode) == "array":
+        default_choice = "2"
+    elif normalize_responses_input_mode(current_mode) == "string":
+        default_choice = "3"
+
+    mode_choice = Prompt.ask("[bold green]>[/]", choices=["1", "2", "3"], default=default_choice)
+    selected_mode = RESPONSES_INPUT_MODES[int(mode_choice) - 1]
+    probe_now = Confirm.ask("[bold]保存后立即探测网关输入兼容性（string/array）?[/]", default=(selected_mode == "auto"))
+    probe_model = ""
+    if probe_now:
+        probe_model = Prompt.ask("[bold]探测模型 ID（留空自动发现）[/]", default="").strip()
+    return selected_mode, probe_now, probe_model
+
+
+def _print_responses_mode_summary(provider: str, status: Dict[str, Any]):
+    mode = normalize_responses_input_mode(status.get("mode", "auto"))
+    probe = status.get("probe", {}) if isinstance(status.get("probe"), dict) else {}
+    console.print(f"  [bold]Responses 输入模式:[/] {_responses_input_mode_label(mode)}")
+    if probe:
+        detected = str(probe.get("detectedMode", "unknown") or "unknown")
+        s_ok = bool(probe.get("stringOk", False))
+        a_ok = bool(probe.get("arrayOk", False))
+        console.print(f"  [dim]最近探测: detected={detected} | string={s_ok} | array={a_ok}[/]")
 
 
 def menu_inventory():
@@ -442,26 +596,29 @@ def menu_inventory():
         if choice == "0":
             return
         elif choice == "n":
-            add_official_provider()
+            _run_menu_action(add_official_provider, "添加官方服务商")
         elif choice == "c":
-            add_custom_provider()
+            _run_menu_action(add_custom_provider, "添加自定义服务商")
         elif choice == "d":
-            delete_provider_menu()
+            _run_menu_action(delete_provider_menu, "删除服务商")
         elif choice == "r":
-            console.print("\n[yellow]⏳ 正在刷新官方模型池...[/]")
-            ok, info = refresh_official_model_pool()
-            if ok:
-                console.print(f"[green]✅ 已刷新官方模型池（目录模型数: {info}）[/]")
-            else:
-                console.print(f"[bold red]❌ 刷新失败: {info}[/]")
-            pause_enter()
+            def _refresh_pool():
+                console.print("\n[yellow]⏳ 正在刷新官方模型池...[/]")
+                ok, info = refresh_official_model_pool()
+                if ok:
+                    console.print(f"[green]✅ 已刷新官方模型池（目录模型数: {info}）[/]")
+                else:
+                    console.print(f"[bold red]❌ 刷新失败: {info}[/]")
+                pause_enter()
+            _run_menu_action(_refresh_pool, "刷新官方模型池")
         elif choice == "e":
             from tui.tools import menu_embeddings
-            menu_embeddings()
+            _run_menu_action(menu_embeddings, "向量化/记忆检索配置")
         elif choice.isdigit():
             idx = int(choice) - 1
             if 0 <= idx < len(all_providers):
-                menu_provider(all_providers[idx])
+                provider = all_providers[idx]
+                _run_menu_action(lambda p=provider: menu_provider(p), f"管理服务商 {provider}")
 
 
 def get_providers(providers_cfg: Optional[Dict] = None):
@@ -514,7 +671,7 @@ def delete_provider_menu():
             idx = int(choice) - 1
             if 0 <= idx < len(all_providers):
                 provider = all_providers[idx]
-                delete_provider(provider)
+                _run_menu_action(lambda p=provider: delete_provider(p), f"删除服务商 {provider}")
                 # 删除后刷新列表
                 all_providers, _, _ = get_providers()
                 continue
@@ -752,7 +909,8 @@ def _add_provider_secondary_menu(group_name: str, group_providers: List[Dict]):
         elif choice.isdigit():
             idx = int(choice) - 1
             if 0 <= idx < len(group_providers):
-                menu_provider(resolve_provider_id(group_providers[idx]["id"]))
+                provider_id = resolve_provider_id(group_providers[idx]["id"])
+                _run_menu_action(lambda p=provider_id: menu_provider(p), f"管理服务商 {provider_id}")
                 # After configuring a provider, we probably want to return to the main inventory menu.
                 # Since menu_provider handles the setup dialog, when it's done, we can just break out
                 return
@@ -1092,6 +1250,11 @@ def configure_provider_wizard(provider: str):
     base_url = Prompt.ask("[bold]请输入 Base URL[/]", default="").strip()
     api_key = Prompt.ask("[bold]请输入 API Key[/]", default="").strip()
     auto_discover = Confirm.ask("[bold]配置完成后自动发现模型列表?[/]", default=True)
+    responses_mode = "auto"
+    responses_probe = False
+    responses_probe_model = ""
+    if api_proto == "openai-responses":
+        responses_mode, responses_probe, responses_probe_model = _prompt_responses_input_mode_settings(provider)
 
     ok, err, discovered_count, discover_err = configure_custom_provider_config(
         provider=provider,
@@ -1100,9 +1263,49 @@ def configure_provider_wizard(provider: str):
         api_key=api_key,
         discover_models=auto_discover,
     )
+    adapted_from = ""
+    adapted_to = ""
+    if (not ok) and err and "Invalid input" in str(err):
+        fallback_api = API_PROTOCOL_FALLBACKS.get(api_proto, "")
+        if fallback_api and fallback_api in API_PROTOCOLS and fallback_api != api_proto:
+            ok, err, discovered_count, discover_err = configure_custom_provider_config(
+                provider=provider,
+                api_proto=fallback_api,
+                base_url=base_url,
+                api_key=api_key,
+                discover_models=auto_discover,
+            )
+            if ok:
+                adapted_from = api_proto
+                adapted_to = fallback_api
 
     if ok:
-        console.print(f"\n[green]✅ 已添加/更新服务商: {provider} (协议: {api_proto})[/]")
+        effective_api = adapted_to or api_proto
+        console.print(f"\n[green]✅ 已添加/更新服务商: {provider} (协议: {effective_api})[/]")
+        if adapted_from and adapted_to:
+            console.print(f"  [yellow]⚠️ 当前 OpenClaw 版本不接受 {adapted_from}，已自动兼容为 {adapted_to}[/]")
+        if effective_api == "openai-responses":
+            mode_result = apply_provider_responses_mode_config(
+                provider=provider,
+                mode=responses_mode,
+                probe=responses_probe,
+                base_url=base_url,
+                api_key=api_key,
+                probe_model=responses_probe_model,
+            )
+            if mode_result.get("ok"):
+                _print_responses_mode_summary(provider, mode_result)
+                probe_payload = mode_result.get("probe", {}) if isinstance(mode_result.get("probe"), dict) else {}
+                if probe_payload:
+                    detected = str(probe_payload.get("detectedMode", "unknown") or "unknown")
+                    if detected == "array":
+                        console.print("  [yellow]提示: 该网关更适合 array 输入格式。[/]")
+                if mode_result.get("probeError"):
+                    console.print(f"  [yellow]⚠️ Responses 探测未执行: {mode_result.get('probeError')}[/]")
+            else:
+                console.print(f"  [yellow]⚠️ Responses 输入模式保存失败: {mode_result.get('error', 'unknown')}[/]")
+        elif api_proto == "openai-responses" and effective_api != "openai-responses":
+            console.print("  [dim]已回退到非 Responses 协议，跳过 Responses 输入模式设置。[/]")
         if auto_discover:
             if discovered_count > 0:
                 console.print(f"  [dim]✅ 已自动发现并写入 {discovered_count} 个模型[/]")
@@ -1224,6 +1427,7 @@ def menu_provider(provider: str):
 
         # 显示当前配置
         current_api = provider_cfg.get("api", "(未设置)")
+        current_api_token = str(provider_cfg.get("api", "") or "").strip().lower()
         current_baseurl = provider_cfg.get("baseUrl", "(未设置)")
         
         # 判断是否是官方服务商
@@ -1236,6 +1440,8 @@ def menu_provider(provider: str):
             console.print("  [bold][yellow]类型: 自定义服务商[/][/]")
             console.print(f"  [bold]API 协议:[/] {current_api}")
             console.print(f"  [bold]Base URL:[/] {current_baseurl}")
+            if current_api_token == "openai-responses":
+                _print_responses_mode_summary(provider, get_provider_responses_mode_status(provider))
         
         # 展示已激活模型（当前服务商）
         console.print()
@@ -1286,8 +1492,13 @@ def menu_provider(provider: str):
                 console.print("  [cyan]1[/] 更换 API Key")
                 console.print("  [cyan]2[/] 重新授权 (清空配置+模型)")
                 console.print("  [cyan]3[/] 模型管理")
-                console.print("  [cyan]0[/] 返回")
-                choices = ["0", "1", "2", "3"]
+                if current_api_token == "openai-responses":
+                    console.print("  [cyan]4[/] Responses 输入模式设置")
+                    console.print("  [cyan]0[/] 返回")
+                    choices = ["0", "1", "2", "3", "4"]
+                else:
+                    console.print("  [cyan]0[/] 返回")
+                    choices = ["0", "1", "2", "3"]
         else:
             if is_official:
                 if is_oauth:
@@ -1311,8 +1522,13 @@ def menu_provider(provider: str):
             else:
                 console.print("  [cyan]1[/] 配置自定义服务商 (协议/BaseURL/API Key)")
                 console.print("  [cyan]2[/] 模型管理")
-                console.print("  [cyan]0[/] 返回")
-                choices = ["0", "1", "2"]
+                if current_api_token == "openai-responses":
+                    console.print("  [cyan]3[/] Responses 输入模式设置")
+                    console.print("  [cyan]0[/] 返回")
+                    choices = ["0", "1", "2", "3"]
+                else:
+                    console.print("  [cyan]0[/] 返回")
+                    choices = ["0", "1", "2"]
         
         console.print()
         
@@ -1327,61 +1543,65 @@ def menu_provider(provider: str):
             if is_official:
                 if is_oauth:
                     if choice == "1":
-                        do_official_auth(provider)
+                        _run_menu_action(lambda p=provider: do_official_auth(p), f"官方授权 {provider}")
                     elif choice == "2":
-                        reauthorize_provider(provider, is_official)
+                        _run_menu_action(lambda p=provider, off=is_official: reauthorize_provider(p, off), f"重新授权 {provider}")
                     elif choice == "3":
-                        manage_models_menu(provider)
+                        _run_menu_action(lambda p=provider: manage_models_menu(p), f"模型管理 {provider}")
                 else:
                     if plugin_auth_available:
                         if choice == "1":
-                            do_official_auth(provider)
+                            _run_menu_action(lambda p=provider: do_official_auth(p), f"官方向导 {provider}")
                         elif choice == "2":
-                            set_provider_apikey(provider)
+                            _run_menu_action(lambda p=provider: set_provider_apikey(p), f"更换 API Key {provider}")
                         elif choice == "3":
-                            reauthorize_provider(provider, is_official)
+                            _run_menu_action(lambda p=provider, off=is_official: reauthorize_provider(p, off), f"重新授权 {provider}")
                         elif choice == "4":
-                            manage_models_menu(provider)
+                            _run_menu_action(lambda p=provider: manage_models_menu(p), f"模型管理 {provider}")
                     else:
                         if choice == "1":
-                            set_provider_apikey(provider)
+                            _run_menu_action(lambda p=provider: set_provider_apikey(p), f"更换 API Key {provider}")
                         elif choice == "2":
-                            reauthorize_provider(provider, is_official)
+                            _run_menu_action(lambda p=provider, off=is_official: reauthorize_provider(p, off), f"重新授权 {provider}")
                         elif choice == "3":
-                            manage_models_menu(provider)
+                            _run_menu_action(lambda p=provider: manage_models_menu(p), f"模型管理 {provider}")
             else:
                 if choice == "1":
-                    set_provider_apikey(provider)
+                    _run_menu_action(lambda p=provider: set_provider_apikey(p), f"更换 API Key {provider}")
                 elif choice == "2":
-                    reauthorize_provider(provider, is_official)
+                    _run_menu_action(lambda p=provider, off=is_official: reauthorize_provider(p, off), f"重新授权 {provider}")
                 elif choice == "3":
-                    manage_models_menu(provider)
+                    _run_menu_action(lambda p=provider: manage_models_menu(p), f"模型管理 {provider}")
+                elif choice == "4" and current_api_token == "openai-responses":
+                    _run_menu_action(lambda p=provider: configure_provider_responses_input_mode(p), f"设置 Responses 输入模式 {provider}")
         else:
             if is_official:
                 if is_oauth:
                     if choice == "1":
-                        do_official_auth(provider)
+                        _run_menu_action(lambda p=provider: do_official_auth(p), f"官方向导 {provider}")
                     elif choice == "2":
-                        manage_models_menu(provider)
+                        _run_menu_action(lambda p=provider: manage_models_menu(p), f"模型管理 {provider}")
                 else:
                     if plugin_auth_available:
                         if choice == "1":
-                            do_official_auth(provider)
+                            _run_menu_action(lambda p=provider: do_official_auth(p), f"官方向导 {provider}")
                         elif choice == "2":
-                            set_provider_apikey(provider)
+                            _run_menu_action(lambda p=provider: set_provider_apikey(p), f"配置 API Key {provider}")
                         elif choice == "3":
-                            manage_models_menu(provider)
+                            _run_menu_action(lambda p=provider: manage_models_menu(p), f"模型管理 {provider}")
                     else:
                         if choice == "1":
-                            set_provider_apikey(provider)
+                            _run_menu_action(lambda p=provider: set_provider_apikey(p), f"配置 API Key {provider}")
                         elif choice == "2":
-                            manage_models_menu(provider)
+                            _run_menu_action(lambda p=provider: manage_models_menu(p), f"模型管理 {provider}")
             else:
                 if choice == "1":
-                    configure_provider_wizard(provider)
+                    _run_menu_action(lambda p=provider: configure_provider_wizard(p), f"配置自定义服务商 {provider}")
                     pause_enter()
                 elif choice == "2":
-                    manage_models_menu(provider)
+                    _run_menu_action(lambda p=provider: manage_models_menu(p), f"模型管理 {provider}")
+                elif choice == "3" and current_api_token == "openai-responses":
+                    _run_menu_action(lambda p=provider: configure_provider_responses_input_mode(p), f"设置 Responses 输入模式 {provider}")
 
 
 def _friendly_error_message(err: str) -> str:
@@ -1576,6 +1796,37 @@ def set_provider_baseurl(provider: str):
     pause_enter()
 
 
+def configure_provider_responses_input_mode(provider: str):
+    provider = normalize_provider_name(provider)
+    providers_cfg = get_models_providers_cached(force_refresh=True)
+    cfg = providers_cfg.get(provider, {}) if isinstance(providers_cfg.get(provider), dict) else {}
+    current_api = str(cfg.get("api", "") or "").strip().lower()
+    if current_api != "openai-responses":
+        console.print("\n[yellow]⚠️ 当前服务商协议不是 openai-responses，无需配置此项[/]")
+        pause_enter()
+        return
+
+    base_url = str(cfg.get("baseUrl", "") or "").strip()
+    api_key = str(cfg.get("apiKey", "") or "").strip()
+    mode, probe_now, probe_model = _prompt_responses_input_mode_settings(provider)
+    result = apply_provider_responses_mode_config(
+        provider=provider,
+        mode=mode,
+        probe=probe_now,
+        base_url=base_url,
+        api_key=api_key,
+        probe_model=probe_model,
+    )
+    if result.get("ok"):
+        console.print("\n[green]✅ Responses 输入模式已更新[/]")
+        _print_responses_mode_summary(provider, result)
+        if result.get("probeError"):
+            console.print(f"  [yellow]⚠️ 探测未执行: {result.get('probeError')}[/]")
+    else:
+        console.print(f"\n[bold red]❌ 更新失败: {result.get('error', 'unknown')}[/]")
+    pause_enter()
+
+
 def set_provider_protocol(provider: str):
     """设置服务商 API 协议"""
     console.clear()
@@ -1610,10 +1861,43 @@ def set_provider_protocol(provider: str):
     ensure_provider_config(providers_cfg, provider)
     providers_cfg[provider]["api"] = new_proto
     ok, err = set_provider_config(provider, providers_cfg)
-    
+    adapted_from = ""
+    adapted_to = ""
+    if (not ok) and err and "Invalid input" in str(err):
+        fallback_api = API_PROTOCOL_FALLBACKS.get(new_proto, "")
+        if fallback_api and fallback_api in API_PROTOCOLS and fallback_api != new_proto:
+            providers_cfg[provider]["api"] = fallback_api
+            ok, err = set_provider_config(provider, providers_cfg)
+            if ok:
+                adapted_from = new_proto
+                adapted_to = fallback_api
+
     if ok:
         invalidate_models_providers_cache()
-        console.print(f"\n[green]✅ 已更新 API 协议: {new_proto}[/]")
+        effective_proto = adapted_to or new_proto
+        console.print(f"\n[green]✅ 已更新 API 协议: {effective_proto}[/]")
+        if adapted_from and adapted_to:
+            console.print(f"  [yellow]⚠️ 当前 OpenClaw 版本不接受 {adapted_from}，已自动兼容为 {adapted_to}[/]")
+        if effective_proto == "openai-responses":
+            providers_cfg_latest = get_models_providers_cached(force_refresh=True)
+            cfg = providers_cfg_latest.get(provider, {}) if isinstance(providers_cfg_latest.get(provider), dict) else {}
+            base_url = str(cfg.get("baseUrl", "") or "").strip()
+            api_key = str(cfg.get("apiKey", "") or "").strip()
+            mode, probe_now, probe_model = _prompt_responses_input_mode_settings(provider)
+            result = apply_provider_responses_mode_config(
+                provider=provider,
+                mode=mode,
+                probe=probe_now,
+                base_url=base_url,
+                api_key=api_key,
+                probe_model=probe_model,
+            )
+            if result.get("ok"):
+                _print_responses_mode_summary(provider, result)
+                if result.get("probeError"):
+                    console.print(f"  [yellow]⚠️ 探测未执行: {result.get('probeError')}[/]")
+            else:
+                console.print(f"  [yellow]⚠️ Responses 输入模式保存失败: {result.get('error', 'unknown')}[/]")
         if err == "(dry-run)":
             console.print("  [dim]（dry-run：未落盘）[/]")
     else:

@@ -19,6 +19,20 @@ from core import run_cli, DEFAULT_CONFIG_PATH, DEFAULT_BACKUP_DIR, OPENCLAW_BIN,
 console = Console()
 
 
+def _run_menu_action(action, label: str):
+    try:
+        action()
+    except KeyboardInterrupt:
+        console.print(f"\n[yellow]已取消: {label}[/]")
+        pause_enter()
+    except EOFError:
+        console.print(f"\n[yellow]输入流结束，已返回当前菜单: {label}[/]")
+        pause_enter()
+    except Exception as e:
+        console.print(f"\n[bold red]❌ {label} 执行失败: {e}[/]")
+        pause_enter()
+
+
 
 
 def menu_system():
@@ -41,11 +55,11 @@ def menu_system():
         if choice == "0":
             break
         elif choice == "1":
-            restart_gateway()
+            _run_menu_action(restart_gateway, "重启/重载配置")
         elif choice == "2":
-            rollback_config()
+            _run_menu_action(rollback_config, "配置回滚")
         elif choice == "3":
-            run_onboard()
+            _run_menu_action(run_onboard, "运行 Onboard")
 
 
 def is_docker_env() -> bool:

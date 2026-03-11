@@ -46,6 +46,21 @@ console = Console()
 
 from core.utils import safe_input, pause_enter
 
+
+def _run_menu_action(action, label: str):
+    try:
+        action()
+    except KeyboardInterrupt:
+        console.print(f"\n[yellow]已取消: {label}[/]")
+        pause_enter()
+    except EOFError:
+        console.print(f"\n[yellow]输入流结束，已返回当前菜单: {label}[/]")
+        pause_enter()
+    except Exception as e:
+        console.print(f"\n[bold red]❌ {label} 执行失败: {e}[/]")
+        pause_enter()
+
+
 WORKSPACE_SUFFIX_RE = re.compile(r"^workspace(?:_(\d+))?$")
 AGENT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 OPENCLAW_VALID_AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$", re.IGNORECASE)
@@ -1020,9 +1035,9 @@ def global_model_policy_menu():
         if choice == "0":
             return
         if choice == "1":
-            set_default_model_menu()
+            _run_menu_action(set_default_model_menu, "设置全局主模型")
         elif choice == "2":
-            manage_fallbacks_menu()
+            _run_menu_action(manage_fallbacks_menu, "设置全局备用链")
 
 
 def main_agent_settings_menu():
@@ -1520,13 +1535,13 @@ def menu_routing():
         if choice == "0":
             break
         elif choice == "1":
-            set_default_model_menu()
+            _run_menu_action(set_default_model_menu, "设置首选模型")
         elif choice == "2":
-            manage_fallbacks_menu()
+            _run_menu_action(manage_fallbacks_menu, "管理备选链")
         elif choice == "3":
-            subagent_settings_menu()
+            _run_menu_action(subagent_settings_menu, "Agent 派发管理")
         elif choice == "4":
-            main_agent_settings_menu()
+            _run_menu_action(main_agent_settings_menu, "主 Agent 管理")
 
 
 def get_default_model() -> Optional[str]:

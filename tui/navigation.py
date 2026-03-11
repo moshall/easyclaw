@@ -27,6 +27,21 @@ from tui.tools import menu_tools
 console = Console()
 
 
+def _run_menu_action(action, label: str):
+    """执行菜单动作并兜底异常，避免直接跳出当前层级。"""
+    try:
+        action()
+    except KeyboardInterrupt:
+        console.print(f"\n[yellow]已取消: {label}[/]")
+        pause_enter()
+    except EOFError:
+        console.print(f"\n[yellow]输入流结束，已返回当前菜单: {label}[/]")
+        pause_enter()
+    except Exception as e:
+        console.print(f"\n[bold red]❌ {label} 执行失败: {e}[/]")
+        pause_enter()
+
+
 def _get_model_provider_status():
     try:
         default_model = get_default_model() or ""
@@ -110,13 +125,13 @@ def menu_model_provider():
         if choice == "0":
             return
         if choice == "1":
-            menu_inventory()
+            _run_menu_action(menu_inventory, "供应商/模型资源库")
         elif choice == "2":
-            global_model_policy_menu()
+            _run_menu_action(global_model_policy_menu, "全局模型优先级")
         elif choice == "3":
-            agent_model_policy_menu()
+            _run_menu_action(agent_model_policy_menu, "Agent 模型优先级")
         elif choice == "4":
-            spawn_model_policy_menu()
+            _run_menu_action(spawn_model_policy_menu, "Spawn 模型优先级")
 
 
 def menu_service_config():
@@ -136,17 +151,17 @@ def menu_service_config():
         if choice == "0":
             return
         if choice == "1":
-            menu_tools()
+            _run_menu_action(menu_tools, "工具配置")
 
 
 def menu_agent_workspace():
     """Agent 与工作区"""
-    main_agent_settings_menu()
+    _run_menu_action(main_agent_settings_menu, "Agent 与工作区")
 
 
 def menu_subagent_control():
     """Agent 派发管理"""
-    subagent_settings_menu()
+    _run_menu_action(subagent_settings_menu, "Agent 派发管理")
 
 
 def menu_automation_integration():
@@ -167,6 +182,6 @@ def menu_automation_integration():
         if choice == "0":
             return
         if choice == "1":
-            menu_gateway()
+            _run_menu_action(menu_gateway, "网关设置")
         elif choice == "2":
-            menu_system()
+            _run_menu_action(menu_system, "系统辅助")

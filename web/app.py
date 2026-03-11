@@ -37,6 +37,7 @@ from core.agent_runtime import (
     resolve_agent_runtime_paths,
 )
 from core.datasource import get_custom_models
+from core.provider_responses import list_provider_responses_modes
 from core.search_adapters import (
     ADAPTER_SPECS,
     OFFICIAL_SEARCH_SOURCES,
@@ -56,9 +57,14 @@ from core.sandbox import is_sandbox_enabled
 from core.write_engine import activate_model, deactivate_model, upsert_provider_api_key
 from tui.inventory import (
     API_PROTOCOLS,
+    apply_provider_responses_mode_config,
+    apply_official_api_key_via_onboard,
     configure_custom_provider_config,
     get_official_provider_options,
+    get_provider_responses_mode_status,
+    is_official_provider,
     refresh_official_model_pool,
+    resolve_api_key_auth_choice,
 )
 from tui.routing import (
     RECOMMENDED_CONTROL_PLANE_CAPABILITIES,
@@ -92,9 +98,33 @@ PROVIDER_DEFAULT_BASE_URLS: Dict[str, str] = {
     "openrouter": "https://openrouter.ai/api/v1",
 }
 API_PROTOCOL_FALLBACKS: Dict[str, str] = {
+    "openai-responses": "openai-completions",
     "openai-chat": "openai-completions",
     "anthropic-messages": "anthropic-completions",
 }
+MANAGED_CHANNEL_CATALOG: List[Dict[str, str]] = [
+    {
+        "id": "telegram",
+        "label": "Telegram",
+        "docs": "https://docs.openclaw.ai/channels/telegram",
+        "authType": "token_or_env",
+    },
+    {
+        "id": "discord",
+        "label": "Discord",
+        "docs": "https://docs.openclaw.ai/channels/discord",
+        "authType": "token_or_env",
+    },
+    {
+        "id": "feishu",
+        "label": "Feishu / Lark",
+        "docs": "https://docs.openclaw.ai/channels/feishu",
+        "authType": "app_id_secret",
+    },
+]
+MANAGED_CHANNEL_IDS = {item["id"] for item in MANAGED_CHANNEL_CATALOG}
+FEISHU_PLUGIN_ID = "feishu"
+FEISHU_PLUGIN_PACKAGE = "@openclaw/feishu"
 
 
 def verify_token(x_claw_token: str = Header(...)) -> str:
@@ -115,6 +145,121 @@ def _cached(key: str, ttl_seconds: float, loader, force: bool = False):
 
 def _invalidate_cache():
     _CACHE.clear()
+
+
+def _safe_json_loads(text: str) -> Any:
+    raw = str(text or "").strip()
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
+def _run_cli_json_with_error(args: List[str]) -> tuple[Any, str, int]:
+    stdout, stderr, code = run_cli(list(args) + ["--json"])
+    if code != 0:
+        return {}, (stderr or stdout or "命令执行失败"), code
+    payload = _safe_json_loads(stdout)
+    if isinstance(payload, (dict, list)):
+        return payload, "", 0
+    return {}, "JSON 解析失败", 1
+
+
+def _plugin_installed(plugin_rows: Any, plugin_id: str) -> bool:
+    pid = str(plugin_id or "").strip().lower()
+    if not pid or not isinstance(plugin_rows, list):
+        return False
+    for row in plugin_rows:
+        if not isinstance(row, dict):
+            continue
+        rid = str(row.get("id", "") or "").strip().lower()
+        name = str(row.get("name", "") or "").strip().lower()
+        if rid == pid or name == pid:
+            return True
+    return False
+
+
+def _load_channels_snapshot_uncached() -> Dict[str, Any]:
+    channels_list_json, channels_list_error, channels_list_code = _run_cli_json_with_error(
+        ["channels", "list", "--no-usage"]
+    )
+    channels_status_json, channels_status_error, channels_status_code = _run_cli_json_with_error(
+        ["channels", "status", "--probe", "--timeout", "5000"]
+    )
+    plugins_json, plugins_error, plugins_code = _run_cli_json_with_error(["plugins", "list"])
+
+    chat = channels_list_json.get("chat", {}) if isinstance(channels_list_json, dict) else {}
+    if not isinstance(chat, dict):
+        chat = {}
+
+    status_payload = channels_status_json if isinstance(channels_status_json, dict) else {}
+    plugin_rows = plugins_json.get("plugins", []) if isinstance(plugins_json, dict) else []
+    if not isinstance(plugin_rows, list):
+        plugin_rows = []
+
+    return {
+        "catalog": MANAGED_CHANNEL_CATALOG,
+        "list": {
+            "ok": channels_list_code == 0,
+            "error": channels_list_error,
+            "chat": chat,
+        },
+        "status": {
+            "ok": channels_status_code == 0,
+            "error": channels_status_error,
+            "payload": status_payload,
+        },
+        "plugins": {
+            "ok": plugins_code == 0,
+            "error": plugins_error,
+            "rows": plugin_rows,
+            "feishuInstalled": _plugin_installed(plugin_rows, FEISHU_PLUGIN_ID),
+        },
+    }
+
+
+def _load_channels_snapshot(force: bool = False) -> Dict[str, Any]:
+    return _cached("channels_snapshot", 5.0, _load_channels_snapshot_uncached, force=force) or {
+        "catalog": MANAGED_CHANNEL_CATALOG,
+        "list": {"ok": False, "error": "未获取", "chat": {}},
+        "status": {"ok": False, "error": "未获取", "payload": {}},
+        "plugins": {"ok": False, "error": "未获取", "rows": [], "feishuInstalled": False},
+    }
+
+
+def _set_config_via_cli(path: str, value: Any) -> tuple[bool, str]:
+    payload = json.dumps(value, ensure_ascii=False)
+    stdout, stderr, code = run_cli(["config", "set", path, payload, "--json"])
+    if code != 0:
+        return False, (stderr or stdout or f"config set {path} failed")
+    return True, ""
+
+
+def _load_plugins_snapshot_uncached() -> Dict[str, Any]:
+    plugins_json, plugins_error, plugins_code = _run_cli_json_with_error(["plugins", "list"])
+    plugin_rows = plugins_json.get("plugins", []) if isinstance(plugins_json, dict) else []
+    if not isinstance(plugin_rows, list):
+        plugin_rows = []
+    diagnostics = plugins_json.get("diagnostics", []) if isinstance(plugins_json, dict) else []
+    if not isinstance(diagnostics, list):
+        diagnostics = []
+    return {
+        "ok": plugins_code == 0,
+        "error": plugins_error,
+        "plugins": plugin_rows,
+        "diagnostics": diagnostics,
+    }
+
+
+def _load_plugins_snapshot(force: bool = False) -> Dict[str, Any]:
+    return _cached("plugins_snapshot", 5.0, _load_plugins_snapshot_uncached, force=force) or {
+        "ok": False,
+        "error": "未获取",
+        "plugins": [],
+        "diagnostics": [],
+    }
 
 
 def _normalize_provider(provider: str) -> str:
@@ -509,6 +654,7 @@ def _provider_inventory_rows_uncached() -> List[Dict[str, Any]]:
     profiles_by_provider = config.get_profiles_by_provider()
     models_by_provider = config.get_models_by_provider()
     providers_cfg = get_models_providers() or {}
+    responses_modes = list_provider_responses_modes()
 
     all_providers = set(profiles_by_provider.keys()) | set(models_by_provider.keys()) | set(providers_cfg.keys())
     rows: List[Dict[str, Any]] = []
@@ -516,6 +662,9 @@ def _provider_inventory_rows_uncached() -> List[Dict[str, Any]]:
         profiles = profiles_by_provider.get(provider, [])
         models = models_by_provider.get(provider, [])
         p_cfg = providers_cfg.get(provider, {}) if isinstance(providers_cfg.get(provider), dict) else {}
+        responses_key = _normalize_provider(provider)
+        responses_meta = responses_modes.get(responses_key, {}) if isinstance(responses_modes.get(responses_key), dict) else {}
+        responses_probe = responses_meta.get("probe", {}) if isinstance(responses_meta.get("probe"), dict) else {}
         key_count = 1 if str(p_cfg.get("apiKey", "") or "").strip() else 0
         rows.append(
             {
@@ -525,6 +674,8 @@ def _provider_inventory_rows_uncached() -> List[Dict[str, Any]]:
                 "modelCount": len(models),
                 "api": str(p_cfg.get("api", "") or ""),
                 "baseUrl": str(p_cfg.get("baseUrl", "") or ""),
+                "responsesInputMode": str(responses_meta.get("mode", "") or ""),
+                "responsesProbeDetected": str(responses_probe.get("detectedMode", "") or ""),
             }
         )
     return rows
@@ -751,6 +902,7 @@ def _state_payload(force: bool = False, include_usage: bool = False) -> Dict[str
         },
         "officialProviderOptions": [],
         "providerProtocols": list(API_PROTOCOLS),
+        "providerResponsesModes": list_provider_responses_modes(),
     }
 
 
@@ -851,10 +1003,20 @@ class CustomProviderIn(BaseModel):
     baseUrl: str
     apiKey: str
     discoverModels: bool = True
+    responsesInputMode: str = "auto"
+    probeResponsesInput: bool = True
+    probeModel: str = ""
 
 
 class DiscoverModelsIn(BaseModel):
     provider: str
+
+
+class ProviderResponsesModeIn(BaseModel):
+    provider: str
+    mode: str = "auto"
+    probe: bool = False
+    probeModel: str = ""
 
 
 class ConfigRollbackIn(BaseModel):
@@ -869,6 +1031,41 @@ class OfficialOauthStartIn(BaseModel):
 class ModelToggleIn(BaseModel):
     key: str
     activate: bool = True
+
+
+class ChannelConnectIn(BaseModel):
+    channel: str
+    account: str = ""
+    token: str = ""
+    useEnv: bool = False
+    appId: str = ""
+    appSecret: str = ""
+    feishuDomain: str = "feishu"
+    installPlugin: bool = True
+
+
+class ChannelDisconnectIn(BaseModel):
+    channel: str
+    account: str = ""
+
+
+class PluginInstallIn(BaseModel):
+    spec: str
+    pin: bool = False
+
+
+class PluginActionIn(BaseModel):
+    pluginId: str
+
+
+class PluginUpdateIn(BaseModel):
+    pluginId: str = ""
+    all: bool = False
+
+
+class PluginUninstallIn(BaseModel):
+    pluginId: str
+    keepFiles: bool = False
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -896,6 +1093,171 @@ async def get_health_status():
         "usage": usage,
         "activeModels": active_models,
     }
+
+
+@app.get("/api/channels/status", dependencies=[Depends(verify_token)])
+async def get_channels_status(force: bool = False):
+    return _load_channels_snapshot(force=force)
+
+
+@app.post("/api/channels/connect", dependencies=[Depends(verify_token)])
+async def connect_channel_api(body: ChannelConnectIn):
+    channel = str(body.channel or "").strip().lower()
+    account = str(body.account or "").strip()
+    if channel not in MANAGED_CHANNEL_IDS:
+        raise HTTPException(status_code=400, detail=f"不支持的通道: {channel}")
+
+    if channel in {"telegram", "discord"}:
+        if not body.useEnv and not str(body.token or "").strip():
+            raise HTTPException(status_code=400, detail=f"{channel} 需要 token，或勾选 useEnv")
+
+        args = ["channels", "add", "--channel", channel]
+        if account:
+            args.extend(["--account", account])
+        if body.useEnv:
+            args.append("--use-env")
+        token = str(body.token or "").strip()
+        if token:
+            args.extend(["--token", token])
+
+        stdout, stderr, code = run_cli(args)
+        if code != 0:
+            raise HTTPException(status_code=400, detail=f"通道配置失败: {stderr or stdout or 'channels add failed'}")
+    else:
+        app_id = str(body.appId or "").strip()
+        app_secret = str(body.appSecret or "").strip()
+        if not app_id or not app_secret:
+            raise HTTPException(status_code=400, detail="feishu 需要 appId 和 appSecret")
+
+        snapshot = _load_channels_snapshot(force=True)
+        feishu_installed = bool((snapshot.get("plugins", {}) or {}).get("feishuInstalled"))
+        if body.installPlugin and not feishu_installed:
+            stdout, stderr, code = run_cli(["plugins", "install", FEISHU_PLUGIN_PACKAGE])
+            if code != 0:
+                raise HTTPException(status_code=400, detail=f"安装 Feishu 插件失败: {stderr or stdout or 'plugins install failed'}")
+
+        target_account = account or "main"
+        ok, err = _set_config_via_cli("channels.feishu.enabled", True)
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"写入 Feishu 配置失败: {err}")
+        ok, err = _set_config_via_cli(f"channels.feishu.accounts.{target_account}.appId", app_id)
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"写入 Feishu appId 失败: {err}")
+        ok, err = _set_config_via_cli(f"channels.feishu.accounts.{target_account}.appSecret", app_secret)
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"写入 Feishu appSecret 失败: {err}")
+        domain = str(body.feishuDomain or "").strip().lower()
+        if domain in {"feishu", "lark"}:
+            ok, err = _set_config_via_cli("channels.feishu.domain", domain)
+            if not ok:
+                raise HTTPException(status_code=400, detail=f"写入 Feishu domain 失败: {err}")
+
+    config.reload()
+    _invalidate_cache()
+    return {
+        "ok": True,
+        "state": _state_payload(force=True),
+        "channels": _load_channels_snapshot(force=True),
+    }
+
+
+@app.post("/api/channels/disconnect", dependencies=[Depends(verify_token)])
+async def disconnect_channel_api(body: ChannelDisconnectIn):
+    channel = str(body.channel or "").strip().lower()
+    account = str(body.account or "").strip()
+    if channel not in MANAGED_CHANNEL_IDS:
+        raise HTTPException(status_code=400, detail=f"不支持的通道: {channel}")
+
+    args = ["channels", "remove", "--channel", channel, "--delete"]
+    if account:
+        args.extend(["--account", account])
+    stdout, stderr, code = run_cli(args)
+    if code != 0:
+        raise HTTPException(status_code=400, detail=f"通道移除失败: {stderr or stdout or 'channels remove failed'}")
+
+    config.reload()
+    _invalidate_cache()
+    return {
+        "ok": True,
+        "state": _state_payload(force=True),
+        "channels": _load_channels_snapshot(force=True),
+    }
+
+
+@app.get("/api/plugins/status", dependencies=[Depends(verify_token)])
+async def get_plugins_status(force: bool = False):
+    return _load_plugins_snapshot(force=force)
+
+
+@app.post("/api/plugins/install", dependencies=[Depends(verify_token)])
+async def install_plugin_api(body: PluginInstallIn):
+    spec = str(body.spec or "").strip()
+    if not spec:
+        raise HTTPException(status_code=400, detail="spec 不能为空")
+    args = ["plugins", "install", spec]
+    if body.pin:
+        args.append("--pin")
+    stdout, stderr, code = run_cli(args)
+    if code != 0:
+        raise HTTPException(status_code=400, detail=f"插件安装失败: {stderr or stdout or 'plugins install failed'}")
+    _invalidate_cache()
+    return {"ok": True, "plugins": _load_plugins_snapshot(force=True), "state": _state_payload(force=True)}
+
+
+@app.post("/api/plugins/enable", dependencies=[Depends(verify_token)])
+async def enable_plugin_api(body: PluginActionIn):
+    plugin_id = str(body.pluginId or "").strip()
+    if not plugin_id:
+        raise HTTPException(status_code=400, detail="pluginId 不能为空")
+    stdout, stderr, code = run_cli(["plugins", "enable", plugin_id])
+    if code != 0:
+        raise HTTPException(status_code=400, detail=f"启用插件失败: {stderr or stdout or 'plugins enable failed'}")
+    _invalidate_cache()
+    return {"ok": True, "plugins": _load_plugins_snapshot(force=True), "state": _state_payload(force=True)}
+
+
+@app.post("/api/plugins/disable", dependencies=[Depends(verify_token)])
+async def disable_plugin_api(body: PluginActionIn):
+    plugin_id = str(body.pluginId or "").strip()
+    if not plugin_id:
+        raise HTTPException(status_code=400, detail="pluginId 不能为空")
+    stdout, stderr, code = run_cli(["plugins", "disable", plugin_id])
+    if code != 0:
+        raise HTTPException(status_code=400, detail=f"禁用插件失败: {stderr or stdout or 'plugins disable failed'}")
+    _invalidate_cache()
+    return {"ok": True, "plugins": _load_plugins_snapshot(force=True), "state": _state_payload(force=True)}
+
+
+@app.post("/api/plugins/update", dependencies=[Depends(verify_token)])
+async def update_plugin_api(body: PluginUpdateIn):
+    plugin_id = str(body.pluginId or "").strip()
+    args = ["plugins", "update"]
+    if body.all:
+        args.append("--all")
+    else:
+        if not plugin_id:
+            raise HTTPException(status_code=400, detail="pluginId 不能为空，或设置 all=true")
+        args.append(plugin_id)
+    stdout, stderr, code = run_cli(args)
+    if code != 0:
+        raise HTTPException(status_code=400, detail=f"更新插件失败: {stderr or stdout or 'plugins update failed'}")
+    _invalidate_cache()
+    return {"ok": True, "plugins": _load_plugins_snapshot(force=True), "state": _state_payload(force=True)}
+
+
+@app.post("/api/plugins/uninstall", dependencies=[Depends(verify_token)])
+async def uninstall_plugin_api(body: PluginUninstallIn):
+    plugin_id = str(body.pluginId or "").strip()
+    if not plugin_id:
+        raise HTTPException(status_code=400, detail="pluginId 不能为空")
+    args = ["plugins", "uninstall", plugin_id, "--force"]
+    if body.keepFiles:
+        args.append("--keep-files")
+    stdout, stderr, code = run_cli(args)
+    if code != 0:
+        raise HTTPException(status_code=400, detail=f"卸载插件失败: {stderr or stdout or 'plugins uninstall failed'}")
+    _invalidate_cache()
+    return {"ok": True, "plugins": _load_plugins_snapshot(force=True), "state": _state_payload(force=True)}
 
 
 @app.post("/api/models/global", dependencies=[Depends(verify_token)])
@@ -1091,19 +1453,37 @@ async def upsert_provider_api_key_api(body: ProviderApiKeyIn):
 
     providers_cfg = get_models_providers() or {}
     existing_cfg = providers_cfg.get(provider, {}) if isinstance(providers_cfg.get(provider), dict) else {}
-    default_base_url = (body.baseUrl or "").strip() or str(existing_cfg.get("baseUrl", "") or "").strip()
-    if not default_base_url:
-        default_base_url = PROVIDER_DEFAULT_BASE_URLS.get(provider, "")
+    base_url_input = (body.baseUrl or "").strip()
+    is_official = bool(is_official_provider(provider))
+    auth_choice = resolve_api_key_auth_choice(provider) if is_official else ""
 
-    ok, err = upsert_provider_api_key(provider, api_key, default_base_url=default_base_url)
-    if not ok:
-        raise HTTPException(status_code=400, detail=f"写入服务商 API Key 失败: {err}")
+    # 官方 provider 优先调用 OpenClaw 官方 onboarding，避免被当作“自定义 provider 流程”。
+    if is_official and auth_choice:
+        ok, err = apply_official_api_key_via_onboard(provider, auth_choice, api_key)
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"写入官方服务商 API Key 失败: {err}")
 
-    if body.baseUrl.strip() or default_base_url:
-        providers_cfg.setdefault(provider, {})
-        providers_cfg[provider]["baseUrl"] = (body.baseUrl or "").strip() or default_base_url
-        set_models_providers(providers_cfg)
+        if base_url_input:
+            providers_cfg.setdefault(provider, {})
+            providers_cfg[provider]["baseUrl"] = base_url_input
+            if not set_models_providers(providers_cfg):
+                raise HTTPException(status_code=500, detail="写入服务商 baseUrl 失败")
+    else:
+        default_base_url = base_url_input or str(existing_cfg.get("baseUrl", "") or "").strip()
+        if not default_base_url:
+            default_base_url = PROVIDER_DEFAULT_BASE_URLS.get(provider, "")
 
+        ok, err = upsert_provider_api_key(provider, api_key, default_base_url=default_base_url)
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"写入服务商 API Key 失败: {err}")
+
+        if base_url_input or default_base_url:
+            providers_cfg.setdefault(provider, {})
+            providers_cfg[provider]["baseUrl"] = base_url_input or default_base_url
+            if not set_models_providers(providers_cfg):
+                raise HTTPException(status_code=500, detail="写入服务商 baseUrl 失败")
+
+    config.reload()
     _invalidate_cache()
     return {"ok": True, "state": _state_payload(force=True)}
 
@@ -1142,12 +1522,25 @@ async def add_custom_provider_api(body: CustomProviderIn):
     if not ok:
         raise HTTPException(status_code=400, detail=f"添加自定义服务商失败: {err}")
 
+    effective_api = adapted_api.get("to") or chosen_api
+    responses_mode_result: Dict[str, Any] = {}
+    if effective_api == "openai-responses":
+        responses_mode_result = apply_provider_responses_mode_config(
+            provider=provider,
+            mode=body.responsesInputMode,
+            probe=bool(body.probeResponsesInput),
+            base_url=body.baseUrl.strip(),
+            api_key=body.apiKey.strip(),
+            probe_model=body.probeModel.strip(),
+        )
+
     _invalidate_cache()
     return {
         "ok": True,
         "adaptedApi": adapted_api,
         "discoveredCount": discovered_count,
         "discoverError": discover_err,
+        "responsesMode": responses_mode_result or get_provider_responses_mode_status(provider),
         "state": _state_payload(force=True),
     }
 
@@ -1184,6 +1577,42 @@ async def discover_provider_models_api(body: DiscoverModelsIn):
 
     _invalidate_cache()
     return {"ok": True, "count": len(normalized_models), "state": _state_payload(force=True)}
+
+
+@app.post("/api/providers/responses-mode", dependencies=[Depends(verify_token)])
+async def set_provider_responses_mode_api(body: ProviderResponsesModeIn):
+    provider = _normalize_provider(body.provider)
+    if not provider:
+        raise HTTPException(status_code=400, detail="provider 必填")
+
+    providers_cfg = get_models_providers() or {}
+    p_cfg = providers_cfg.get(provider, {}) if isinstance(providers_cfg.get(provider), dict) else {}
+    api_proto = str(p_cfg.get("api", "") or "").strip().lower()
+    if api_proto != "openai-responses":
+        raise HTTPException(status_code=400, detail="该服务商当前协议不是 openai-responses")
+
+    base_url = str(p_cfg.get("baseUrl", "") or "").strip()
+    api_key = str(p_cfg.get("apiKey", "") or "").strip()
+    result = apply_provider_responses_mode_config(
+        provider=provider,
+        mode=body.mode,
+        probe=bool(body.probe),
+        base_url=base_url,
+        api_key=api_key,
+        probe_model=body.probeModel.strip(),
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=500, detail=result.get("error", "更新 Responses 输入模式失败"))
+
+    _invalidate_cache()
+    return {
+        "ok": True,
+        "provider": provider,
+        "responsesMode": get_provider_responses_mode_status(provider),
+        "probeResult": result.get("probe", {}),
+        "probeError": result.get("probeError", ""),
+        "state": _state_payload(force=True),
+    }
 
 
 @app.delete("/api/providers/{provider}", dependencies=[Depends(verify_token)])

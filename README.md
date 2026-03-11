@@ -6,6 +6,19 @@ ClawPanel 是 OpenClaw 的管理工具，提供：
 
 说明：仓库已更名为 `moshall/clawpanel`，文档与安装脚本 URL 已同步更新；运行命令统一为 `clawpanel` / `clawtui`。
 
+## 0. 更新说明（v0.1.5）
+
+发布时间：2026-03-11
+
+- 菜单稳定性增强：统一子菜单异常兜底，避免异常冒泡导致 TUI 退出。
+- 官方服务商流程修复：添加官方 provider 时优先走官方 onboarding，不再误判为自定义服务商。
+- OpenAI Responses 协议增强：
+  - 支持 `auto / array / string` 输入模式配置；
+  - 可按需探测网关输入兼容性并保存探测结果。
+- Agent 权限管理增强：支持 `tools.profile` 与目录/功能细粒度权限联动。
+- 真机回归通过：Debian 12（Linux 原生 + Docker）全链路验证通过。
+- 兼容性回归通过：`OpenClaw 2026.2.26` 与 `2026.3.8` 均可完成关键流程。
+
 ## 1. 功能特性
 
 - 模型与凭据管理

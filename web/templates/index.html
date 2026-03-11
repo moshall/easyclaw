@@ -180,7 +180,7 @@
               <div class="table-wrap">
                 <table>
                   <thead>
-                    <tr><th>服务商</th><th>账号</th><th>Key</th><th>模型</th><th>操作</th></tr>
+                    <tr><th>服务商</th><th>账号</th><th>Key</th><th>模型</th><th>Responses 输入</th><th>操作</th></tr>
                   </thead>
                   <tbody id="providerManageRows"></tbody>
                 </table>
@@ -213,6 +213,11 @@
               <div class="row"><label>协议</label><select id="customProviderProtocol"></select></div>
               <div class="row"><label>Base URL</label><input id="customProviderBaseUrl" type="text" placeholder="https://.../v1" /></div>
               <div class="row"><label>API Key</label><input id="customProviderApiKey" type="password" /></div>
+              <div id="customResponsesModeBox">
+                <div class="row"><label>Responses 输入模式</label><select id="customProviderResponsesMode"><option value="auto">auto（自动）</option><option value="array">array（仅数组）</option><option value="string">string（仅字符串）</option></select></div>
+                <label class="check"><input id="customProviderProbeResponses" type="checkbox" checked /> 保存后探测 string/array 兼容性</label>
+                <div class="row"><label>探测模型（可选）</label><input id="customProviderProbeModel" type="text" placeholder="留空自动发现" /></div>
+              </div>
               <label class="check"><input id="customProviderDiscover" type="checkbox" checked /> 保存后自动发现模型</label>
               <button class="btn" id="addCustomProviderBtn">新增/更新自定义服务商</button>
             </div>
@@ -302,11 +307,81 @@
         <h2>服务配置</h2>
 
         <div class="subtabs">
+          <button class="subtab-btn" data-subgroup="services" data-subtarget="services-channels">多渠道接入</button>
+          <button class="subtab-btn" data-subgroup="services" data-subtarget="services-plugins">官方插件市场</button>
           <button class="subtab-btn active" data-subgroup="services" data-subtarget="services-official">官方搜索</button>
           <button class="subtab-btn" data-subgroup="services" data-subtarget="services-adapter">扩展搜索</button>
           <button class="subtab-btn" data-subgroup="services" data-subtarget="services-failover">主备切换</button>
           <button class="subtab-btn" data-subgroup="services" data-subtarget="services-rollback">配置回滚</button>
         </div>
+
+        <section id="services-channels" class="subpanel" data-subgroup="services">
+          <article class="card">
+            <div class="card-head">
+              <h3>通道状态（官方 CLI）</h3>
+              <button class="btn subtle" id="refreshChannelsBtn">刷新通道状态</button>
+            </div>
+            <p><strong>Gateway 探测：</strong><span id="channelsGatewayStatus">-</span></p>
+            <p><strong>Feishu 插件：</strong><span id="feishuPluginState">-</span></p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>通道</th><th>Account</th><th>已配置</th><th>enabled</th><th>linked</th><th>running</th><th>connected</th><th>probe</th><th>错误</th></tr>
+                </thead>
+                <tbody id="channelRows"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="card">
+            <h3>Telegram / Discord 连接</h3>
+            <p class="hint">仅调用官方命令：<code>openclaw channels add/remove</code></p>
+            <div class="row"><label>通道</label><select id="channelConnectType"><option value="telegram">telegram</option><option value="discord">discord</option></select></div>
+            <div class="row"><label>Account（可选）</label><input id="channelAccount" type="text" placeholder="default / work" /></div>
+            <div class="row"><label>Token</label><input id="channelToken" type="password" placeholder="机器人 token" /></div>
+            <label class="check"><input id="channelUseEnv" type="checkbox" /> 使用环境变量（--use-env）</label>
+            <div class="actions">
+              <button class="btn" id="connectChannelBtn">连接通道</button>
+              <button class="btn danger" id="disconnectChannelBtn">断开通道</button>
+            </div>
+          </article>
+
+          <article class="card">
+            <h3>Feishu / Lark 连接</h3>
+            <p class="hint">优先安装官方插件 <code>@openclaw/feishu</code>，再通过官方 config 命令写入配置。</p>
+            <div class="row"><label>Account</label><input id="feishuAccount" type="text" value="main" /></div>
+            <div class="row"><label>App ID</label><input id="feishuAppId" type="text" placeholder="cli_xxx" /></div>
+            <div class="row"><label>App Secret</label><input id="feishuAppSecret" type="password" placeholder="xxx" /></div>
+            <div class="row"><label>Domain</label><select id="feishuDomain"><option value="feishu">feishu</option><option value="lark">lark</option></select></div>
+            <label class="check"><input id="feishuInstallPlugin" type="checkbox" checked /> 若未安装则先安装 Feishu 插件</label>
+            <button class="btn" id="connectFeishuBtn">连接 Feishu</button>
+          </article>
+        </section>
+
+        <section id="services-plugins" class="subpanel" data-subgroup="services">
+          <article class="card">
+            <div class="card-head">
+              <h3>插件列表（官方 CLI）</h3>
+              <button class="btn subtle" id="refreshPluginsBtn">刷新插件状态</button>
+            </div>
+            <p class="hint">所有操作都透传官方命令：<code>openclaw plugins ...</code></p>
+            <div class="row"><label>安装 Spec</label><input id="pluginInstallSpec" type="text" placeholder="@openclaw/feishu / @openclaw/line" /></div>
+            <label class="check"><input id="pluginInstallPin" type="checkbox" /> 安装时记录精确版本（--pin）</label>
+            <div class="actions">
+              <button class="btn" id="installPluginBtn">安装插件</button>
+              <button class="btn subtle" id="updateAllPluginsBtn">更新全部插件</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>ID</th><th>Name</th><th>Status</th><th>Version</th><th>Source</th><th>操作</th></tr>
+                </thead>
+                <tbody id="pluginRows"></tbody>
+              </table>
+            </div>
+            <pre id="pluginDiagnostics"></pre>
+          </article>
+        </section>
 
         <section id="services-official" class="subpanel active" data-subgroup="services">
           <article class="card">

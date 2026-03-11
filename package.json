@@ -1,6 +1,6 @@
 {
   "name": "@milkkey/clawpanel",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "ClawPanel npm bridge installer for OpenClaw",
   "license": "UNLICENSED",
   "preferGlobal": true,
@@ -31,7 +31,8 @@
     "web/static/*",
     "web/templates/*",
     "npm/*.js",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "repository": {
     "type": "git",

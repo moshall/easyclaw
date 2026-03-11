@@ -38,6 +38,28 @@ from tui.navigation import (
 from tui.routing import get_default_model, get_fallbacks
 
 
+def _safe_pause_after_error():
+    try:
+        input("按回车键继续...")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
+def _run_menu_action(action, label: str):
+    """执行子菜单动作，避免异常直接终止主程序。"""
+    try:
+        action()
+    except KeyboardInterrupt:
+        console.print(f"\n[yellow]已取消: {label}[/]")
+        _safe_pause_after_error()
+    except EOFError:
+        console.print(f"\n[yellow]输入流结束，已返回主菜单: {label}[/]")
+        _safe_pause_after_error()
+    except Exception as e:
+        console.print(f"\n[bold red]❌ {label} 执行失败: {e}[/]")
+        _safe_pause_after_error()
+
+
 def _build_main_layout() -> Layout:
     now = datetime.now().strftime("%H:%M:%S")
     layout = Layout()
@@ -127,17 +149,17 @@ def menu_main():
             console.print("[bold cyan]👋 再见![/]")
             break
         elif choice == '1':
-            show_health_dashboard()
+            _run_menu_action(show_health_dashboard, "资产大盘")
         elif choice == '2':
-            menu_model_provider()
+            _run_menu_action(menu_model_provider, "模型与供应商")
         elif choice == '3':
-            menu_agent_workspace()
+            _run_menu_action(menu_agent_workspace, "Agent 与工作区")
         elif choice == '4':
-            menu_subagent_control()
+            _run_menu_action(menu_subagent_control, "Agent 派发管理")
         elif choice == '5':
-            menu_service_config()
+            _run_menu_action(menu_service_config, "服务配置")
         elif choice == '6':
-            menu_automation_integration()
+            _run_menu_action(menu_automation_integration, "自动化与集成")
 
 
 def show_status():
