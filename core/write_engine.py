@@ -1,5 +1,4 @@
 """WriteEngine - strong consistency writes with read-back verification."""
-import json
 from typing import Dict, Any, Tuple
 
 from . import run_cli, run_cli_json, config, get_models_providers, set_models_providers
@@ -72,10 +71,8 @@ def set_provider_config(provider: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
     if _is_dry_run():
         return True, "(dry-run)"
 
-    payload = json.dumps(cfg or {})
-    stdout, stderr, code = run_cli(["config", "set", "models.providers", payload])
-    if code != 0:
-        return False, stderr or stdout or "config set failed"
+    if not set_models_providers(cfg or {}):
+        return False, "config set failed"
 
     # read-back verify
     result = run_cli_json(["config", "get", "models.providers"])

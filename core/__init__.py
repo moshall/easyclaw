@@ -764,11 +764,125 @@ def get_models_providers() -> Dict:
     return {}
 
 
+def _iter_agent_ids_for_provider_sync() -> List[str]:
+    ids: List[str] = ["main"]
+    try:
+        config.reload()
+        agents = config.data.get("agents", {}) if isinstance(config.data, dict) else {}
+        agent_list = agents.get("list", []) if isinstance(agents, dict) else []
+        if isinstance(agent_list, list):
+            for row in agent_list:
+                if not isinstance(row, dict):
+                    continue
+                aid = str(row.get("id", "") or "").strip()
+                if aid and aid not in ids:
+                    ids.append(aid)
+    except Exception:
+        pass
+    return ids
+
+
+def _refresh_agent_models_json(agent_id: str) -> bool:
+    runtime = resolve_agent_runtime_paths(agent_id, DEFAULT_CONFIG_PATH)
+    agent_dir = str(runtime.get("agent_dir", "") or "").strip()
+    if not agent_dir:
+        return False
+    try:
+        os.makedirs(agent_dir, exist_ok=True)
+    except Exception:
+        return False
+
+    env = os.environ.copy()
+    env["OPENCLAW_AGENT_DIR"] = agent_dir
+    env["PI_CODING_AGENT_DIR"] = agent_dir
+    cmd = [resolve_openclaw_bin(), "models", "list", "--all", "--json"]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=30,
+            env=env,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _merge_providers_into_agent_models_json(agent_id: str, providers_dict: Dict[str, Any]) -> bool:
+    runtime = resolve_agent_runtime_paths(agent_id, DEFAULT_CONFIG_PATH)
+    models_path = str(runtime.get("models_json", "") or "").strip()
+    if not models_path:
+        return False
+
+    try:
+        parent = os.path.dirname(models_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+    except Exception:
+        return False
+
+    existing: Dict[str, Any] = {}
+    try:
+        if os.path.exists(models_path):
+            with open(models_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                existing = loaded
+    except Exception:
+        existing = {}
+
+    merged = existing if isinstance(existing, dict) else {}
+    current_providers = (
+        merged.get("providers", {})
+        if isinstance(merged.get("providers", {}), dict)
+        else {}
+    )
+    next_providers: Dict[str, Any] = dict(current_providers)
+
+    for key, row in (providers_dict or {}).items():
+        provider = normalize_provider_name(key)
+        if not provider or not isinstance(row, dict):
+            continue
+        previous = next_providers.get(provider, {})
+        merged_row = dict(previous) if isinstance(previous, dict) else {}
+        merged_row.update(deepcopy(row))
+        next_providers[provider] = merged_row
+
+    merged["providers"] = next_providers
+    try:
+        with open(models_path, "w", encoding="utf-8") as f:
+            json.dump(merged, f, indent=2)
+            f.write("\n")
+        return True
+    except Exception:
+        return False
+
+
+def sync_models_providers_to_all_agents(providers_dict: Optional[Dict[str, Any]] = None) -> bool:
+    providers = providers_dict if isinstance(providers_dict, dict) else get_models_providers()
+    if not isinstance(providers, dict):
+        providers = {}
+
+    ok_all = True
+    for aid in _iter_agent_ids_for_provider_sync():
+        if _refresh_agent_models_json(aid):
+            continue
+        if not _merge_providers_into_agent_models_json(aid, providers):
+            ok_all = False
+    return ok_all
+
+
 def set_models_providers(providers_dict: Dict) -> bool:
     """设置 models.providers 配置"""
     payload = json.dumps(providers_dict or {})
     _, _, retcode = run_cli(["config", "set", "models.providers", payload, "--json"])
-    return retcode == 0
+    if retcode != 0:
+        return False
+    # best-effort: 同步到各 Agent 的 runtime models.json，避免新增 provider 在子 Agent 不可见
+    sync_models_providers_to_all_agents(providers_dict or {})
+    return True
 
 
 OFFICIAL_MEMORY_PROVIDERS = ["openai", "gemini", "voyage", "mistral"]

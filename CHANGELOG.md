@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.6 - 2026-03-11
+
+### Fixed
+- 修复 provider 配置写入后未同步到各 Agent runtime `models.json` 的问题。
+- 修复 `openai-responses` 等自定义 provider 在 Agent 模型选择中不可见的问题。
+
+### Changed
+- `set_provider_config` 统一走 `set_models_providers`，避免绕过同步链路。
+- `set_models_providers` 增加全 Agent 同步流程：优先调用官方 CLI 刷新，失败时回退文件级合并。
+
+### Verified
+- 相关回归测试通过（含 provider/runtime 同步路径）。
+
 ## 0.1.5 - 2026-03-11
 
 ### Added

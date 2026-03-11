@@ -1,6 +1,6 @@
 {
   "name": "@milkkey/clawpanel",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "ClawPanel npm bridge installer for OpenClaw",
   "license": "UNLICENSED",
   "preferGlobal": true,
